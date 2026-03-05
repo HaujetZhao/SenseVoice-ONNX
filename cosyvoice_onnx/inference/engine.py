@@ -93,7 +93,127 @@ class SenseVoiceInference:
         log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
         
         # 5. 解码
-        decoded_ids = greedy_search(log_probs, blank_id=0, prompt_len=4)
-        text = self.sp.decode(decoded_ids)
+        # greedy_search 现在返回 List[dict]
+        greedy_res = greedy_search(log_probs, self.sp, blank_id=0, prompt_len=4)
+        text = "".join([item['text'] for item in greedy_res])
         
         return text
+
+    def recognize_topk(self, audio_data: np.ndarray, top_k=40, lid="zh", itn=True):
+        """
+        推理并获取每帧的 Top-K 候选词极其概率 (用于热词召回分析)
+        返回: topk_data, greedy_text
+        """
+        # 1. 提取 LFR 特征
+        lfr_feat = self.frontend.extract(audio_data)
+        
+        # 2. 准备 Prompt & Mask
+        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
+        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
+        
+        # 3. Encoder 推理
+        enc_out = self.enc_sess.run(None, {
+            "speech_feat": lfr_feat[np.newaxis, ...], 
+            "mask": mask, 
+            "prompt_feat": prompt_feat
+        })[0]
+        
+        # 4. CTC 推理
+        log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
+        
+        # 5. 多路径解析
+        from .ctc import greedy_search, topk_search
+        
+        # 路径 A: 快速贪婪
+        greedy_res = greedy_search(log_probs, self.sp, blank_id=0, prompt_len=4)
+        greedy_text = "".join([item['text'] for item in greedy_res])
+        
+        # 路径 B: 保留每帧 Top-K (用于后续 Radar 处理)
+        topk_data = topk_search(log_probs, self.sp, top_k=top_k, blank_id=0, prompt_len=4)
+        
+        return topk_data, greedy_text
+
+    def recognize_with_hotwords(self, audio_data: np.ndarray, hotwords: list, lid="zh", itn=True):
+        """
+        [核心] 带有热词替换功能的推理
+        返回: List[dict] -> [{'text': '...', 'start': ...}, ...]
+        """
+        # 1. 获取基础数据 (带有时间戳的 greedy 序列)
+        lfr_feat = self.frontend.extract(audio_data)
+        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
+        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
+        
+        enc_out = self.enc_sess.run(None, {"speech_feat": lfr_feat[np.newaxis, ...], "mask": mask, "prompt_feat": prompt_feat})[0]
+        log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
+        
+        from .ctc import greedy_search, topk_search
+        from .radar import HotwordRadar
+        
+        # 获取 Top-1 索引用于幻觉校验
+        top1_indices = np.argmax(log_probs[0, 4:, :], axis=-1)
+        
+        greedy_results = greedy_search(log_probs, self.sp, prompt_len=4)
+        topk_frames = topk_search(log_probs, self.sp, top_k=40, prompt_len=4)
+        
+        # 2. 运行热词雷达扫描
+        radar = HotwordRadar(topk_frames)
+        detected_hotwords = []
+        for word in hotwords:
+            # 传入 self.sp (分词器) 和 top1_indices
+            res = radar.scan(word, tokenizer=self.sp, top1_indices=top1_indices)
+            if res["found"]:
+                detected_hotwords.append({
+                    "text": word,
+                    "start": res["start"],
+                    "end": res["end"],
+                    "prob": res["prob"]
+                })
+        
+        # 3. 按时间顺序进行替换
+        # 排序检测到的热词（按出现时间）
+        detected_hotwords.sort(key=lambda x: x["start"])
+        
+        final_results = []
+        last_hotword_end = -1.0
+        
+        # 对每一个 Greedy 结果进行检查，看它是否落在某个热词的时间范围内
+        for g in greedy_results:
+            # 查找该 greedy 字是否落入任何已识别的热词区间
+            replaced = False
+            for h in detected_hotwords:
+                if g["start"] >= h["start"] and g["start"] <= h["end"]:
+                    # 如果该热词尚未被添加（它是该区间第一个字），则添加整个热词
+                    if h["start"] > last_hotword_end:
+                        # 计算热词内每个字的估算时间（线性分布）
+                        h_chars = list(h["text"])
+                        n_chars = len(h_chars)
+                        duration = h["end"] - h["start"]
+                        step = (duration / n_chars) if n_chars > 1 else 0
+                        
+                        for i, char in enumerate(h_chars):
+                            final_results.append({
+                                "text": char,
+                                "start": round(h["start"] + i * step, 3),
+                                "is_hotword": True
+                            })
+                        last_hotword_end = h["end"]
+                    replaced = True
+                    break
+            
+            if not replaced and g["start"] > last_hotword_end:
+                # [新增：抑制逻辑] 检查这个字是否是刚才热词的冗余重复
+                # 如果当前字出现在最近一个热词结束后的 1.0 秒内
+                if last_hotword_end > 0 and (g["start"] - last_hotword_end < 1.0):
+                    # 简单检查：如果这个字包含在刚才识别出的热词里，跳过它
+                    # 这是一个粗略的重复压制
+                    last_hw_text = [h["text"] for h in detected_hotwords if h["end"] == last_hotword_end]
+                    if last_hw_text and g["text"] in last_hw_text[0]:
+                        continue
+                        
+                final_results.append({
+                    "text": g["text"],
+                    "start": g["start"],
+                    "is_hotword": False
+                })
+                
+        return final_results
