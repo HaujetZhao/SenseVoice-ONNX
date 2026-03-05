@@ -29,3 +29,20 @@ class EncoderExportWrapper(nn.Module):
         encoder_out = self.encoder(x, full_mask)
 
         return encoder_out
+
+class CTCExportWrapper(nn.Module):
+    """
+    SenseVoice CTC 解码头导出包装器
+    输入:
+        - enc_out: (Batch, T_plus_4, 512) -> Encoder 的输出向量
+    输出:
+        - log_probs: (Batch, T_plus_4, Vocab)
+    """
+    def __init__(self, ctc):
+        super().__init__()
+        self.ctc = ctc
+
+    def forward(self, enc_out: torch.Tensor):
+        # CTC 通常包含一个线性层和 log_softmax
+        # 在 funasr 的 CTC 实现中，可以直接调用 log_softmax 方法
+        return self.ctc.log_softmax(enc_out)
