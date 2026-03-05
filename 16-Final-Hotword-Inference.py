@@ -11,7 +11,7 @@ def main():
     # 2. 准备音频和热词
     # 特别加入测试热词，包括一个容易干扰的“虚假”热词看看效果
     audio_path = r"d:\cosyvoice\test-fun.mp3"
-    hotwords = ["Fun ASR Nano", "事情"] 
+    hotwords = ["Fun-ASR-Nano", "事情"] 
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")
