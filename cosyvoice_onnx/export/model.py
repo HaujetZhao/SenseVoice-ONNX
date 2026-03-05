@@ -7,44 +7,29 @@ from typing import Iterable, Optional
 
 from funasr.register import tables
 from funasr.models.ctc.ctc import CTC
-from funasr.utils.datadir_writer import DatadirWriter
+# from funasr.utils.datadir_writer import DatadirWriter # 导出不需要
 from funasr.models.paraformer.search import Hypothesis
 from funasr.train_utils.device_funcs import force_gatherable
 from funasr.losses.label_smoothing_loss import LabelSmoothingLoss
 from funasr.metrics.compute_acc import compute_accuracy, th_accuracy
 from funasr.utils.load_utils import load_audio_text_image_video, extract_fbank
-from utils.ctc_alignment import ctc_forced_align
+# from utils.ctc_alignment import ctc_forced_align # 导出不需要
 
 class SinusoidalPositionEncoder(torch.nn.Module):
-    """ """
-
-    def __int__(self, d_model=80, dropout_rate=0.1):
-        pass
-
-    def encode(
-        self, positions: torch.Tensor = None, depth: int = None, dtype: torch.dtype = torch.float32
-    ):
-        batch_size = positions.size(0)
+    def encode(self, positions, depth, dtype):
         positions = positions.type(dtype)
         device = positions.device
-        log_timescale_increment = torch.log(torch.tensor([10000], dtype=dtype, device=device)) / (
-            depth / 2 - 1
-        )
-        inv_timescales = torch.exp(
-            torch.arange(depth / 2, device=device).type(dtype) * (-log_timescale_increment)
-        )
-        inv_timescales = torch.reshape(inv_timescales, [batch_size, -1])
-        scaled_time = torch.reshape(positions, [1, -1, 1]) * torch.reshape(
-            inv_timescales, [1, 1, -1]
-        )
+        log_timescale_increment = torch.log(torch.tensor([10000], dtype=dtype, device=device)) / (depth / 2 - 1)
+        inv_timescales = torch.exp(torch.arange(depth / 2, device=device).type(dtype) * (-log_timescale_increment))
+        inv_timescales = inv_timescales.unsqueeze(0).unsqueeze(0) # (1, 1, depth/2)
+        scaled_time = positions.unsqueeze(-1) * inv_timescales # (Batch, Time, depth/2)
         encoding = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=2)
         return encoding.type(dtype)
 
     def forward(self, x):
-        batch_size, timesteps, input_dim = x.size()
-        positions = torch.arange(1, timesteps + 1, device=x.device)[None, :]
-        position_encoding = self.encode(positions, input_dim, x.dtype).to(x.device)
-
+        # 使用 cumsum 代替 arange，对 ONNX 动态形状极其友好
+        positions = torch.ones_like(x[:, :, 0], dtype=torch.long).cumsum(1)
+        position_encoding = self.encode(positions, x.size(-1), x.dtype).to(x.device)
         return x + position_encoding
 
 
@@ -546,11 +531,13 @@ class SenseVoiceEncoderSmall(nn.Module):
     def forward(
         self,
         xs_pad: torch.Tensor,
-        ilens: torch.Tensor,
+        masks: torch.Tensor, # 修改为直接接受 mask
     ):
-        """Embed positions in tensor."""
-        masks = sequence_mask(ilens, device=ilens.device)[:, None, :]
-
+        # xs_pad: (Batch, Time, Dim)
+        # masks: (Batch, Time) -> 内部会转为 (Batch, 1, Time) 以匹配标准 Attention
+        if masks.dim() == 2:
+            masks = masks.unsqueeze(1)
+            
         xs_pad *= self.output_size() ** 0.5
 
         xs_pad = self.embed(xs_pad)
@@ -567,14 +554,14 @@ class SenseVoiceEncoderSmall(nn.Module):
         xs_pad = self.after_norm(xs_pad)
 
         # forward encoder2
-        olens = masks.squeeze(1).sum(1).int()
+        # olens = masks.squeeze(1).sum(1).int() # 导出时不需要 olens
 
         for layer_idx, encoder_layer in enumerate(self.tp_encoders):
             encoder_outs = encoder_layer(xs_pad, masks)
             xs_pad, masks = encoder_outs[0], encoder_outs[1]
 
         xs_pad = self.tp_norm(xs_pad)
-        return xs_pad, olens
+        return xs_pad
 
 
 @tables.register("model_classes", "SenseVoiceSmall")
