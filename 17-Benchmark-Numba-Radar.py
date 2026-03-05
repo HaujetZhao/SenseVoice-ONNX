@@ -31,7 +31,7 @@ def main():
     
     # 2. 构造 5000 个热词的巨大列表
     # 包含目标词
-    test_hotwords = ["Fun ASR Nano", "事情", "测试一下", "那我来", "代码加速"]
+    test_hotwords = ["Fun-ASR-Nano", "事情", "测试一下", "那我来", "代码加速"]
     # 注入 5000 个随机字符组合来模拟巨大词表
     for i in range(5000):
         test_hotwords.append(f"随机词汇{i}")

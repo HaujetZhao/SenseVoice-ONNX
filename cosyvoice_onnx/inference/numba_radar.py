@@ -93,14 +93,19 @@ def numba_parallel_scan(
 
 class FastHotwordRadar:
     def __init__(self, hotwords, tokenizer):
+        import re
         self.tokenizer = tokenizer
         self.hotwords = hotwords
-        self.hotword_tokens = [tokenizer.encode_as_pieces(w) for w in hotwords]
+        
+        # 核心优化：搜索词 vs 显示词分离
+        # 我们把减号、下划线等替换为空格，这样能匹配 ASR 的正常 Token 输出
+        self.search_hotwords = [re.sub(r'[-_]', ' ', w) for w in hotwords]
+        self.hotword_tokens = [tokenizer.encode_as_pieces(sw) for sw in self.search_hotwords]
         
         all_ids = []
         offsets = [0]
-        for w in hotwords:
-            ids = tokenizer.encode(w)
+        for sw in self.search_hotwords:
+            ids = tokenizer.encode(sw)
             all_ids.extend(ids)
             offsets.append(len(all_ids))
             
@@ -120,7 +125,7 @@ class FastHotwordRadar:
         final_detected = []
         for i in range(len(self.hotwords)):
             if raw_results[i, 0] > 0:
-                # 提取 Token 级的时间戳详情
+                # 依然使用原始带减号的文本进行返回
                 tokens = self.hotword_tokens[i]
                 token_details = []
                 for t_idx in range(len(tokens)):
@@ -132,7 +137,7 @@ class FastHotwordRadar:
                         })
                 
                 final_detected.append({
-                    "text": self.hotwords[i],
+                    "text": self.hotwords[i], 
                     "start": raw_results[i, 1] * 0.060,
                     "end": raw_results[i, 2] * 0.060,
                     "prob": raw_results[i, 3],
