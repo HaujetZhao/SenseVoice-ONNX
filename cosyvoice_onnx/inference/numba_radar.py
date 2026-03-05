@@ -13,55 +13,51 @@ def numba_parallel_scan(
     max_gap=1
 ):
     """
-    Numba 加速版并行热词雷达
-    返回: match_results (N, 4) -> [found, start_frame, end_frame, avg_prob]
+    Numba 加速版并行热词雷达 (支持逐词回溯时间戳)
+    返回: 
+      - results (N, 4): [found, start_frame, end_frame, avg_prob]
+      - token_frames_output (N, 32): 记录每个 Token 对应的帧索引，-1 表示无效
     """
     num_hotwords = len(hotword_offsets) - 1
     T, K = topk_ids.shape
     results = np.zeros((num_hotwords, 4), dtype=np.float32)
+    token_frames_output = np.full((num_hotwords, 32), -1, dtype=np.int32) # 最多支持 32 个 Token
 
-    # 并行遍历每一个热词
     for i in prange(num_hotwords):
         start_off = hotword_offsets[i]
         end_off = hotword_offsets[i+1]
         word_len = end_off - start_off
         
-        # 扫描起始点
         t_ptr = 0
         while t_ptr < T:
-            # 尝试在这个 t_ptr 为起点搜寻该热词
             current_token_idx = 0
             search_ptr = t_ptr
             
-            # 用于记录路径的锚点信息
             match_start = -1
             match_end = -1
             match_prob_sum = 0.0
             has_real_emission = False
             
+            # 临时存放当前搜寻路径的帧索引
+            temp_frames = np.full(32, -1, dtype=np.int32)
+            
             while current_token_idx < word_len and search_ptr < T:
                 target_token_id = hotword_ids_flat[start_off + current_token_idx]
                 
-                # 在窗口内寻找该 Token 的最佳锚点
                 found_t = -1
                 best_p = -1.0
-                
                 look_ahead_end = min(search_ptr + max_lookahead, T)
                 
                 for t in range(search_ptr, look_ahead_end):
-                    # 间隙约束校验
                     if current_token_idx > 0:
                         last_t = match_end
-                        # 统计 (last_t, t) 之间的非空 Greedy 帧数
                         gap_emissions = 0
                         for k in range(last_t + 1, t):
                             if top1_indices[k] != blank_id:
                                 gap_emissions += 1
-                        
                         if gap_emissions > max_gap:
                             continue
                     
-                    # 搜寻 Top-K 候选项
                     for k_idx in range(K):
                         if topk_ids[t, k_idx] == target_token_id:
                             prob = topk_probs[t, k_idx]
@@ -70,39 +66,37 @@ def numba_parallel_scan(
                                 found_t = t
                 
                 if found_t != -1:
-                    # 锁定一个 Token 锚点
-                    if current_token_idx == 0:
-                        match_start = found_t
+                    if current_token_idx == 0: match_start = found_t
                     match_end = found_t
                     match_prob_sum += best_p
-                    if top1_indices[found_t] != blank_id:
-                        has_real_emission = True
+                    temp_frames[current_token_idx] = found_t
+                    if top1_indices[found_t] != blank_id: has_real_emission = True
                     
                     search_ptr = found_t + 1
                     current_token_idx += 1
                 else:
-                    # 路径断了
                     break
             
-            # 最终路径校验
             if current_token_idx == word_len and has_real_emission:
-                results[i, 0] = 1.0 # found
+                results[i, 0] = 1.0 
                 results[i, 1] = float(match_start)
                 results[i, 2] = float(match_end)
                 results[i, 3] = match_prob_sum / word_len
-                break # 该词已找到，停止搜索
+                # 写入最终输出
+                for token_pos in range(word_len):
+                    token_frames_output[i, token_pos] = temp_frames[token_pos]
+                break 
             
-            # 起点步进
             t_ptr += 1
             
-    return results
+    return results, token_frames_output
 
 class FastHotwordRadar:
     def __init__(self, hotwords, tokenizer):
         self.tokenizer = tokenizer
         self.hotwords = hotwords
+        self.hotword_tokens = [tokenizer.encode_as_pieces(w) for w in hotwords]
         
-        # 预编码热词为 ID 序列
         all_ids = []
         offsets = [0]
         for w in hotwords:
@@ -114,10 +108,7 @@ class FastHotwordRadar:
         self.hotword_offsets = np.array(offsets, dtype=np.int32)
 
     def scan(self, topk_ids, topk_probs, top1_indices, blank_id=0):
-        """
-        调用 Numba 并行加速扫描
-        """
-        raw_results = numba_parallel_scan(
+        raw_results, raw_token_frames = numba_parallel_scan(
             topk_ids,
             topk_probs,
             top1_indices,
@@ -126,14 +117,25 @@ class FastHotwordRadar:
             blank_id=blank_id
         )
         
-        # 整理结果
         final_detected = []
         for i in range(len(self.hotwords)):
             if raw_results[i, 0] > 0:
+                # 提取 Token 级的时间戳详情
+                tokens = self.hotword_tokens[i]
+                token_details = []
+                for t_idx in range(len(tokens)):
+                    frame_idx = raw_token_frames[i, t_idx]
+                    if frame_idx != -1:
+                        token_details.append({
+                            "token": tokens[t_idx],
+                            "time": frame_idx * 0.060
+                        })
+                
                 final_detected.append({
                     "text": self.hotwords[i],
                     "start": raw_results[i, 1] * 0.060,
                     "end": raw_results[i, 2] * 0.060,
-                    "prob": raw_results[i, 3]
+                    "prob": raw_results[i, 3],
+                    "tokens": token_details
                 })
         return final_detected

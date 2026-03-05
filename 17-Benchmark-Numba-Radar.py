@@ -55,9 +55,11 @@ def main():
     print(f"🔥 [万词并行扫描耗时]: {(t2-t1)*1000:.2f}ms")
     
     # 打印部分结果校验
-    print("\n命中示例:")
+    print("\n命中示例 (详细时间轴):")
     for h in hits[:5]:
         print(f" - {h['text']} ({h['start']:.2f}s ~ {h['end']:.2f}s, prob: {h['prob']:.4f})")
+        for t in h['tokens']:
+            print(f"    └─ {t['token']:<6} : {t['time']:.2f}s")
 
 if __name__ == "__main__":
     main()
