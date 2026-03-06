@@ -110,20 +110,41 @@ class SenseVoiceInference:
                 if g["start"] >= hw["start"] - 0.02 and g["start"] <= hw["end"] + 0.02:
                     # 被热词封锁，如果还没插入则插入
                     if hw["text"] not in results_set:
-                        # 核心修复：遍历原始字符串（含空格），确保格式完美
+                        # 核心升级：Token 块模式输出
                         origin_text = hw["text"]
-                        chars = list(origin_text)
+                        search_base = origin_text.lower()
                         
-                        # 依然使用 detected_hotwords 提供的总区间
-                        duration = hw["end"] - hw["start"]
-                        step = duration / max(len(chars), 1)
+                        # 1. 寻找每个 Token 覆盖的字符起始位置
+                        anchors = [] # 存储 (idx_in_text, timestamp)
+                        curr_search_pos = 0
+                        for tk in hw["tokens"]:
+                            clean_tk = tk["token"].replace("\u2581", "").strip().lower()
+                            if not clean_tk: continue
+                            idx = search_base.find(clean_tk, curr_search_pos)
+                            if idx != -1:
+                                anchors.append((idx, tk["time"]))
+                                curr_search_pos = idx + len(clean_tk)
                         
-                        for i, char in enumerate(chars):
+                        # 确保至少有一个起始锚点
+                        if not anchors: 
+                            anchors.append((0, hw["start"]))
+                        elif anchors[0][0] != 0:
+                            # 如果第一个 Token 不是从 0 开始（比如开头是标点），强制补全 0
+                            anchors.insert(0, (0, hw["start"]))
+                            
+                        # 2. 根据锚点进行分块切割
+                        # 将字符串切成：[start_idx, next_start_idx)
+                        for i in range(len(anchors)):
+                            start_idx, start_time = anchors[i]
+                            end_idx = anchors[i+1][0] if (i+1) < len(anchors) else len(origin_text)
+                            
+                            chunk_text = origin_text[start_idx:end_idx]
                             final_results.append({
-                                "text": char,
-                                "start": hw["start"] + i * step,
+                                "text": chunk_text,
+                                "start": start_time,
                                 "is_hotword": True
                             })
+                            
                         results_set.add(hw["text"])
                         last_hotword_end = hw["end"]
                     replaced = True
