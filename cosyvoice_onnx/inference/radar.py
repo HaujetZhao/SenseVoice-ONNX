@@ -3,99 +3,152 @@ import numpy as np
 
 class HotwordRadar:
     """
-    热词召回组件 (基于 Top-K 矩阵搜索路径)
+    [直观版] 高性能热词召回组件 (纯 Python + 字典加速)
+    核心算法：基于 Greedy 帧触发的前缀搜索
     """
-    def __init__(self, frames_topk):
-        """
-        Args:
-            frames_topk: List[List[Tuple[char, prob]]]，每帧的 Top-K 候选项
-        """
-        self.frames = frames_topk
-
-    def clean_text(self, text):
-        """清理掉空格、符号，并转为小写"""
-        return re.sub(r'[^a-zA-Z0-9\u4e00-\u9fa5]', '', str(text)).lower()
-
-    def scan(self, hotword: str, tokenizer, top1_indices: np.ndarray, blank_id=0):
-        """
-        [大师版] 带有“严格排放间隙”约束的路径搜索
-        """
-        tokens = tokenizer.encode_as_pieces(hotword)
-        if not tokens: return {"found": False}
+    def __init__(self, hotwords, tokenizer):
+        self.tokenizer = tokenizer
+        self.hotwords = hotwords
         
-        T = len(self.frames)
-        M = len(tokens)
+        # 预处理搜索词：去除标点并分词
+        self.search_hotwords = [re.sub(r'[^\w\s]+', ' ', w) for w in hotwords]
         
-        # 搜索状态
-        t_ptr = 0
-        while t_ptr < T:
-            match_map = {}
-            match_frames = []
-            current_token_idx = 0
-            search_ptr = t_ptr
+        # 构建前缀索引: {首字_TokenID: [(word_idx, [全量TokenID序列]), ...]}
+        self.prefix_index = {}
+        for idx, sw in enumerate(self.search_hotwords):
+            token_ids = tokenizer.encode(sw)
+            if not token_ids: continue
             
-            while current_token_idx < M and search_ptr < T:
-                target_token = tokens[current_token_idx]
-                target_cleaned = self.clean_text(target_token)
-                
-                # 在窗口内寻找该 Token 的最佳锚点
-                found_t = -1
-                best_p = -1.0
-                
-                # 寻找窗口：15 帧 (900ms) 足够覆盖一个 BPE Token 的长度
-                look_ahead = min(search_ptr + 15, T)
-                
-                for t in range(search_ptr, look_ahead):
-                    # --- 核心：间隙约束校验 ---
-                    if current_token_idx > 0:
-                        last_t = match_frames[-1]["frame"]
-                        # 统计 (last_t, t) 之间的非空 Greedy 帧数
-                        # 注意：不包含 last_t 和 t 本身
-                        gap_emissions = np.sum(top1_indices[last_t + 1 : t] != blank_id)
-                        if gap_emissions > 1:
-                            # 间隙太大，这个 t 不予考虑
-                            continue
-                    
-                    # 检查当前帧是否包含目标 Token
-                    candidates = self.frames[t]
-                    for char, prob in candidates:
-                        if self.clean_text(char) == target_cleaned:
-                            if prob > best_p:
-                                best_p = prob
-                                found_t = t
-                    
-                    # 性能优化：高置信度锁定
-                    if found_t == t and best_p > 0.7: break
+            first_tid = token_ids[0]
+            if first_tid not in self.prefix_index:
+                self.prefix_index[first_tid] = []
+            self.prefix_index[first_tid].append((idx, token_ids))
+            
+        # 保存分段后的字符串形式用于回显
+        self.hotword_tokens = [tokenizer.encode_as_pieces(sw) for sw in self.search_hotwords]
 
-                if found_t != -1:
-                    # 匹配到一个 Token
-                    match_map[found_t] = target_token
-                    match_frames.append({
-                        "frame": found_t, "token": target_token, "prob": best_p,
-                        "is_greedy": (top1_indices[found_t] != blank_id)
+    def scan(self, topk_ids, topk_probs, top1_indices, blank_id=0, max_lookahead=15, max_gap=1):
+        """
+        [单次扫描] 获取所有非重叠命中结果
+        """
+        T, K = topk_ids.shape
+        hits = []
+
+        # 1. 帧驱动搜索
+        for t in range(T):
+            # 准入条件：必须是 Greedy 非空帧 (实音触发)
+            if top1_indices[t] == blank_id:
+                continue
+            
+            # 检查当前帧 Top-K 中是否有热词首字
+            best_match_in_frame = None
+            
+            for k in range(K):
+                tid = topk_ids[t, k]
+                if tid not in self.prefix_index:
+                    continue
+                
+                # 尝试匹配所有以此 Token 开头的热词
+                for word_idx, token_ids in self.prefix_index[tid]:
+                    match_data = self._try_match(
+                        t, k, token_ids, topk_ids, topk_probs, top1_indices, 
+                        blank_id, max_lookahead, max_gap
+                    )
+                    
+                    if match_data:
+                        # 在同一帧触发的多个候选词中，择优录取
+                        if not best_match_in_frame or match_data["prob"] > best_match_in_frame["prob"]:
+                            best_match_in_frame = {
+                                "word_idx": word_idx,
+                                "start_frame": t,
+                                "end_frame": match_data["end_frame"],
+                                "prob": match_data["prob"],
+                                "frame_indices": match_data["frame_indices"]
+                            }
+            
+            if best_match_in_frame:
+                hits.append(best_match_in_frame)
+
+        # 2. 后处理：非重叠合并
+        return self._post_process(hits)
+
+    def _try_match(self, t_start, k_start, token_ids, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, max_gap):
+        """内部尝试匹配一个特定词"""
+        T = topk_ids.shape[0]
+        word_len = len(token_ids)
+        match_frames = []
+        
+        # 首字处理
+        match_frames.append(t_start)
+        prob_sum = topk_probs[t_start, k_start]
+        last_t = t_start
+        
+        # 后续字跳跃匹配
+        for i in range(1, word_len):
+            target_tid = token_ids[i]
+            found_t = -1
+            best_p = -1.0
+            
+            search_start = last_t + 1
+            search_end = min(search_start + max_lookahead, T)
+            
+            for t in range(search_start, search_end):
+                # 间隙约束：(last_t, t) 之间不能有超过 max_gap 个 Greedy 非空帧
+                gap_emissions = np.count_nonzero(top1_indices[last_t + 1 : t] != blank_id)
+                if gap_emissions > max_gap:
+                    continue
+                
+                # 在此帧的 Top-K 中找目标 Token
+                for k in range(topk_ids.shape[1]):
+                    if topk_ids[t, k] == target_tid:
+                        p = topk_probs[t, k]
+                        if p > best_p:
+                            best_p = p
+                            found_t = t
+            
+            if found_t != -1:
+                match_frames.append(found_t)
+                prob_sum += best_p
+                last_t = found_t
+            else:
+                return None # 链路中断
+                
+        return {
+            "end_frame": last_t,
+            "prob": prob_sum / word_len,
+            "frame_indices": match_frames
+        }
+
+    def _post_process(self, hits):
+        """去重合并，转换为用户友好的结构"""
+        if not hits: return []
+        
+        # 按开始时间排序
+        hits.sort(key=lambda x: x["start_frame"])
+        
+        final_detected = []
+        last_covered_until = -1
+        
+        for h in hits:
+            # 这里的判定条件确保取“第一个发现的名字”，且后续重叠部分不重复报
+            if h["start_frame"] > last_covered_until:
+                idx = h["word_idx"]
+                tokens = self.hotword_tokens[idx]
+                token_details = []
+                
+                for tk_pos, f_idx in enumerate(h["frame_indices"]):
+                    token_details.append({
+                        "token": tokens[tk_pos], 
+                        "time": round(f_idx * 0.060, 3)
                     })
-                    search_ptr = found_t + 1
-                    current_token_idx += 1
-                else:
-                    # 当前 Token 找不到了，说明这条路径断了
-                    break
-            
-            # --- 结果校验 ---
-            if current_token_idx == M:
-                # 至少要撞上一个 Greedy 的“实音”
-                if any(m["is_greedy"] for m in match_frames):
-                    avg_prob = sum(m["prob"] for m in match_frames) / M
-                    return {
-                        "found": True, 
-                        "start": match_frames[0]["frame"] * 0.060,
-                        "end": match_frames[-1]["frame"] * 0.060,
-                        "prob": avg_prob, 
-                        "match_map": match_map
-                    }
-            
-            # 如果这条路没走通，起点往后挪一帧，继续大海捞针
-            t_ptr += 1
-            
-        return {"found": False}
-        
-        return {"found": False}
+                
+                final_detected.append({
+                    "text": self.hotwords[idx],
+                    "start": round(h["start_frame"] * 0.060, 3),
+                    "end": round(h["end_frame"] * 0.060, 3),
+                    "prob": round(h["prob"], 4),
+                    "tokens": token_details
+                })
+                last_covered_until = h["end_frame"]
+                
+        return final_detected

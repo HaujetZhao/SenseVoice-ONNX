@@ -2,20 +2,23 @@ import time
 import numpy as np
 import librosa
 from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig
-from cosyvoice_onnx.inference.numba_radar import FastHotwordRadar
+from cosyvoice_onnx.inference.radar import HotwordRadar
 
 def main():
     # 1. 初始化引擎
     config = ASREngineConfig(model_dir="./model", device="cpu")
     engine = SenseVoiceInference(config)
-    audio, _ = librosa.load(r"d:\cosyvoice\test-fun.mp3", sr=16000)
+    audio, _ = librosa.load(r"test-fun.mp3", sr=16000)
     
     # 2. 准备搜索空间 (Top-K 概率和索引)
     lfr_feat = engine.frontend.extract(audio)
     enc_out = engine.encoder.forward(lfr_feat, lid="zh")
     
     # 直接调用重构后的解码器方法获取搜索空间
-    topk_indices, topk_probs, top1_indices, log_probs = engine.decoder.get_topk_space(enc_out, top_k=20)
+    # decode_all 返回: (greedy_results, radar_indices, radar_probs, top1_indices)
+    _, topk_indices, topk_probs, top1_indices = engine.decoder.decode_all(
+        enc_out, engine.sp, top_k=20, T_valid=len(lfr_feat)
+    )
     
     # 2. 构造 5000 个热词的巨大列表
     # 包含目标词
@@ -26,9 +29,9 @@ def main():
         
     print(f"🚀 开始压力测试，热词数量: {len(test_hotwords)}")
     
-    # 3. 初始化 FastRadar (预编码热词)
+    # 3. 初始化 Radar (预编码热词，此时使用高效字典索引)
     t0 = time.time()
-    radar = FastHotwordRadar(test_hotwords, engine.sp)
+    radar = HotwordRadar(test_hotwords, engine.sp)
     print(f"   [初始化/预编码耗时]: {(time.time()-t0)*1000:.2f}ms")
     
     # 4. 执行多核并行扫描 (预热)

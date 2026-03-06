@@ -9,7 +9,7 @@ from .encoder import SenseVoiceEncoder
 from .decoder import SenseVoiceDecoder
 from .integrator import ResultIntegrator
 from .ctc import greedy_search, topk_search
-from .numba_radar import FastHotwordRadar
+from .radar import HotwordRadar
 from .schema import ASREngineConfig, TranscriptionResult, Timings, RecognitionResult
 
 class SenseVoiceInference:
@@ -84,8 +84,8 @@ class SenseVoiceInference:
                 if isinstance(hotwords, str):
                     final_list = [line.strip() for line in hotwords.splitlines() if line.strip()]
         
-        from .numba_radar import FastHotwordRadar
-        self.radar = FastHotwordRadar(final_list, self.sp)
+        from .radar import HotwordRadar
+        self.radar = HotwordRadar(final_list, self.sp)
 
     def __call__(self, audio_data: np.ndarray, lid="zh", itn=True):
         """[默认识别接口] 使用热词雷达进行解码"""
@@ -133,19 +133,18 @@ class SenseVoiceInference:
         enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         t_encoder = time.perf_counter() - t0
         
-        # 3. 解码器获取搜索空间 (已集成 TopK)
+        # 3. 解码器处理 (单次推理产出所有数据)
         t0 = time.perf_counter()
         T_valid = lfr_feat.shape[0]
-        topk_indices, topk_probs, top1_indices, _ = self.decoder.get_topk_space(enc_out, top_k=top_k, T_valid=T_valid)
+        greedy_results, topk_indices, topk_probs, top1_indices = self.decoder.decode_all(
+            enc_out, self.sp, top_k=top_k, T_valid=T_valid
+        )
         t_decoder = time.perf_counter() - t0
         
         # 4. 运行并行扫描 (Numba)
         t0 = time.perf_counter()
         detected_hotwords = self.radar.scan(topk_indices, topk_probs, top1_indices)
         t_radar = time.perf_counter() - t0
-        
-        # 5. 直接从解码器获取 Greedy 序列
-        greedy_results = self.decoder.decode_greedy(enc_out, self.sp, prompt_len=4, T_valid=T_valid)
         
         # 6. 调用整合器进行碰撞检测与 Token 块合成
         t0 = time.perf_counter()

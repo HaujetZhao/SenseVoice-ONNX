@@ -42,79 +42,56 @@ class SenseVoiceDecoder:
 
     def forward(self, enc_out):
         """
-        执行 CTC Head 推理
-        返回: 
-            topk_log_probs: (1, T, 100)
-            topk_indices: (1, T, 100)
+        执行 CTC Head 推理 (单次推理)
         """
-        # 确保输入精度正确
         if enc_out.dtype != self.input_dtype:
             enc_out = enc_out.astype(self.input_dtype)
             
         print(f"[Decoder] DML 推理：输入形状 {enc_out.shape}")
-        # 现在模型有两个输出
+        # 模型一次性返回 Top-100 的概率和索引
         topk_log_probs, topk_indices = self.session.run(None, {"enc_out": enc_out})
         return topk_log_probs, topk_indices
 
-    def decode_greedy(self, enc_out, sp, blank_id=0, prompt_len=4, T_valid=None):
+    def decode_all(self, enc_out, sp, top_k=20, prompt_len=4, T_valid=None, blank_id=0):
         """
-        封装贪婪搜索 (使用模型返回的 Top-1)
+        [核心接口] 单次推理获取所有解码信息
+        返回: (greedy_results, radar_indices, radar_probs, top1_indices)
         """
-        _, topk_indices = self.forward(enc_out)
-        
-        # 取 Top-1 索引进行 CTC 解码
-        # topk_indices 形状是 (1, T, 100) -> 取 (1, T, 0)
-        log_probs_placeholder = np.zeros((1, topk_indices.shape[1], 1), dtype=np.float32)
-        
-        # 为了兼容原有的 greedy_search 逻辑，我们构造一个只包含 Top-1 的假 log_probs
-        # 或者直接修改输出逻辑。这里我们对 topk_indices 进行切片处理
-        if T_valid is not None:
-            active_indices = topk_indices[0, prompt_len : T_valid + prompt_len, 0]
-        else:
-            active_indices = topk_indices[0, prompt_len:, 0]
-            
-        # 连续去重
-        collapsed = []
-        if len(active_indices) > 0:
-            current_id = active_indices[0]
-            start_frame = 0
-            for i in range(1, len(active_indices)):
-                if active_indices[i] != current_id:
-                    collapsed.append((current_id, start_frame))
-                    current_id = active_indices[i]
-                    start_frame = i
-            collapsed.append((current_id, start_frame))
-
-        results = []
-        for token_id, frame_idx in collapsed:
-            if token_id == blank_id: continue
-            token_id = int(token_id)
-            char = sp.id_to_piece(token_id)
-            if not char.strip(): continue
-            results.append({
-                "text": char,
-                "start": round(frame_idx * 0.060, 3)
-            })
-        return results
-
-    def get_topk_space(self, enc_out, top_k=20, T_valid=None):
-        """
-        准备 Numba 雷达所需的搜索空间 (直接利用模型 TopK 输出)
-        返回: topk_indices, topk_probs, top1_indices, log_probs_dummy
-        """
+        # 1. 唯一的一次推理调用
         topk_log_probs, topk_indices = self.forward(enc_out)
         
-        # 1. 切片到有效长度 (跳过 Prompt)
-        # 注意：模型已经帮我们在 GPU 上排好序了，我们只需要取前 top_k 个即可
-        start = 4
-        end = (T_valid + 4) if T_valid is not None else topk_indices.shape[1]
+        # 确定有效范围 (跳过 Prompt 区域)
+        start = prompt_len
+        end = (T_valid + prompt_len) if T_valid is not None else topk_indices.shape[1]
         
-        # 裁剪到请求的 top_k 深度 (模型默认输出 100)
-        final_indices = topk_indices[0, start:end, :top_k].astype(np.int32)
-        # 将对数概率转回概率 [0, 1] 供雷达使用
-        final_probs = np.exp(topk_log_probs[0, start:end, :top_k].astype(np.float32))
+        # --- A. 提取雷达所需 Top-K 空间 ---
+        # 裁剪模型输出的 100 到用户请求的 top_k (通常为20)
+        radar_indices = topk_indices[0, start:end, :top_k].astype(np.int32)
+        radar_probs = np.exp(topk_log_probs[0, start:end, :top_k].astype(np.float32))
+        top1_indices = radar_indices[:, 0]
         
-        top1_indices = final_indices[:, 0]
-        
-        # 为了保持接口兼容性，返回一个空的 log_probs 占位符
-        return final_indices, final_probs, top1_indices, None
+        # --- B. 构造 Greedy 结果 (基于 Top-1) ---
+        greedy_ids = top1_indices
+        collapsed = []
+        if len(greedy_ids) > 0:
+            curr_id = greedy_ids[0]
+            start_frame = 0
+            for i in range(1, len(greedy_ids)):
+                if greedy_ids[i] != curr_id:
+                    collapsed.append((curr_id, start_frame))
+                    curr_id = greedy_ids[i]
+                    start_frame = i
+            collapsed.append((curr_id, start_frame))
+
+        greedy_results = []
+        for tid, fidx in collapsed:
+            if tid == blank_id: continue
+            char = sp.id_to_piece(int(tid))
+            if not char.strip(): ignore_char = True
+            else:
+                greedy_results.append({
+                    "text": char,
+                    "start": round(fidx * 0.060, 3)
+                })
+
+        return greedy_results, radar_indices, radar_probs, top1_indices
