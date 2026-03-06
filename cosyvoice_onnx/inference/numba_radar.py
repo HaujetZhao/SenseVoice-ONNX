@@ -41,7 +41,6 @@ def numba_parallel_scan(
             match_start = -1
             match_end = -1
             match_prob_sum = 0.0
-            has_real_emission = False
             
             # 临时存放当前搜寻路径的帧索引
             temp_frames = np.full(32, -1, dtype=np.int32)
@@ -75,14 +74,13 @@ def numba_parallel_scan(
                     match_end = found_t
                     match_prob_sum += best_p
                     temp_frames[current_token_idx] = found_t
-                    if top1_indices[found_t] != blank_id: has_real_emission = True
                     
                     search_ptr = found_t + 1
                     current_token_idx += 1
                 else:
                     break
             
-            if current_token_idx == word_len and has_real_emission:
+            if current_token_idx == word_len:
                 results[i, 0] = 1.0 
                 results[i, 1] = float(match_start)
                 results[i, 2] = float(match_end)
