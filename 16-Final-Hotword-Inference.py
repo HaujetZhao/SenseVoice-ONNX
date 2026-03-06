@@ -1,15 +1,15 @@
 import os
-import librosa
+import time
 import numpy as np
-from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig
+from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
 
 def main():
     # 1. 初始化引擎 (使用 ASREngineConfig)
     config = ASREngineConfig(
         model_dir="./model",
         device="dml",
-        hotwords=["Fun-ASR-Nano", "事情"],
-        pad_to=30
+        hotwords='hot.txt',
+        pad_to=20
     )
     engine = SenseVoiceInference(config)
     
@@ -23,7 +23,7 @@ def main():
     print(f"\n[SenseVoice] 正在处理音频: {os.path.basename(audio_path)}")
     print(f"[Hotwords] 当前热词列表: {config.hotwords}")
     
-    audio, _ = librosa.load(audio_path, sr=16000)
+    audio = load_audio(audio_path)
     
     # 3. 运行推理 (连续三遍测试速度)
     print(f"\n[Performance] 开始三连测测试 (此时 Radar 已持有 {len(config.hotwords)} 个热词)...")
