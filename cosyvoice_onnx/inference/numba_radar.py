@@ -98,7 +98,9 @@ class FastHotwordRadar:
         import re
         self.tokenizer = tokenizer
         self.hotwords = hotwords
-        self.search_hotwords = [re.sub(r'[-_]', ' ', w) for w in hotwords]
+        # 核心优化：搜索词 vs 显示词分离
+        # 将所有标点符号（非单词、非空格字符）替换为空格，以匹配 ASR 的正常 Token 输出
+        self.search_hotwords = [re.sub(r'[^\w\s]+', ' ', w) for w in hotwords]
         self.hotword_tokens = [tokenizer.encode_as_pieces(sw) for sw in self.search_hotwords]
         
         all_ids = []
