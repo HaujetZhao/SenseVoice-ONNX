@@ -14,6 +14,8 @@ class SenseVoiceDecoder:
             providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
         
         session_opts = ort.SessionOptions()
+        session_opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        session_opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
         print(f"[Decoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")

@@ -13,7 +13,7 @@ def main():
 
     # 1. 创建 ONNX Runtime 会话 (CPU)
     print(f"正在加载 CTC ONNX 模型: {onnx_path}")
-    session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+    session = ort.InferenceSession(onnx_path, providers=['DmlExecutionProvider'])
 
     # 2. 准备随机输入
     # 输入维度是 (Batch, T, 512)

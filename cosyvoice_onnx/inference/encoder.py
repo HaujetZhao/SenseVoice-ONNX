@@ -24,10 +24,15 @@ class SenseVoiceEncoder:
             providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
         
         session_opts = ort.SessionOptions()
+        session_opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        session_opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
         print(f"[Encoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
         self.session = ort.InferenceSession(str(encoder_path), providers=providers, sess_options=session_opts)
+        
+        # 4. 其它设置
+        self.use_dml = (device.lower() == "dml")
 
     def construct_prompt(self, lid="auto", itn=True):
         """构造 4 帧 Prompt Embedding"""
@@ -54,14 +59,13 @@ class SenseVoiceEncoder:
         # 1. 构造 Prompt
         prompt_feat = self.construct_prompt(lid=lid, itn=itn)
         
-        # 2. 构造 Mask
-        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
+        T_valid = lfr_feat.shape[0]
         
-        # 3. 推理
+        # 动态轴推理
+        mask = np.ones((1, T_valid), dtype=np.float32)
         enc_out = self.session.run(None, {
             "speech_feat": lfr_feat[np.newaxis, ...],
             "mask": mask,
             "prompt_feat": prompt_feat
         })[0]
-        
         return enc_out

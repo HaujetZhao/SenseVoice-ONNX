@@ -32,35 +32,49 @@ def main():
     print(f"正在加载 ONNX 模型: {onnx_path}")
     session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
 
-    # 4. 准备随机输入数据 (保持两者完全一致)
+    # 4. 准备测试数据 (测试填充一致性)
+    # 模拟场景：10秒有效信号，放在 30秒的容器里进行 DML 推理
     batch_size = 1
-    T = 30 # 随机长度
+    T_valid = 170 # 10s
+    T_total = 510 # 30s
     D = 560 # 特征维度
     
-    speech_feat = torch.randn(batch_size, T, D)
+    print(f"准备数据: 有效长度={T_valid}, 容器长度={T_total}")
+    
+    # 基础特征 (有效部分)
+    speech_feat_valid = torch.randn(batch_size, T_valid, D)
     prompt_feat = torch.randn(batch_size, 4, D)
-    mask = torch.ones(batch_size, T)
+    
+    # --- Torch 基准推理准备 (纯净 10s 推理) ---
+    full_input_torch = torch.cat([prompt_feat, speech_feat_valid], dim=1)
+    full_lengths_torch = torch.tensor([T_valid + 4], dtype=torch.int32)
 
-    # --- Torch 推理准备 ---
-    # 按照官方逻辑，需要 Concat 并构造 ilens
-    full_input_torch = torch.cat([prompt_feat, speech_feat], dim=1)
-    full_lengths_torch = torch.tensor([T + 4], dtype=torch.int32)
+    # --- ONNX 填充推理准备 (30s 容器 + Replicate Padding) ---
+    # Replicate Padding 最后一帧
+    speech_feat_padding = speech_feat_valid[:, -1:, :].repeat(1, T_total - T_valid, 1)
+    speech_feat_full = torch.cat([speech_feat_valid, speech_feat_padding], dim=1)
+    
+    # Mask: 10s 有效，20s 无效
+    mask_full = torch.zeros(batch_size, T_total)
+    mask_full[:, :T_valid] = 1.0
 
-    # --- ONNX 推理准备 ---
     onnx_inputs = {
-        "speech_feat": speech_feat.numpy(),
-        "mask": mask.numpy(),
+        "speech_feat": speech_feat_full.numpy(),
+        "mask": mask_full.numpy(),
         "prompt_feat": prompt_feat.numpy()
     }
 
     # 5. 执行推理
-    print("运行 Torch 基准推理...")
+    print("运行 Torch 基准推理 (10s 隔离推理)...")
     with torch.no_grad():
-        # 官方 Encoder 返回 (out, olens)，我们取 out
         torch_out, _ = torch_model(full_input_torch, full_lengths_torch)
 
-    print("运行 ONNX 导出模型推理...")
-    onnx_out = session.run(None, onnx_inputs)[0]
+    print(f"运行 ONNX 填充推理 ({T_total}帧容器)...")
+    onnx_out_full = session.run(None, onnx_inputs)[0]
+    
+    # 对比截断：只对比有效部分 (T_valid + 4)
+    onnx_out = onnx_out_full[:, :T_valid + 4, :]
+    torch_out_np = torch_out.numpy()
 
     # 6. 数值比对分析
     torch_out_np = torch_out.numpy()
@@ -77,7 +91,7 @@ def main():
 
     print("\n" + "="*50)
     print("【数值一致性报告】")
-    print(f"测试维度: T={T}, Output_Dim={torch_out_np.shape[-1]}")
+    print(f"测试维度: T_valid={T_valid}, T_total={T_total}, Output_Dim={torch_out_np.shape[-1]}")
     print("-" * 30)
     print(f"余弦相似度: {cos_sim:.10f}")
     print(f"最大绝对误差: {max_diff:.3e}")

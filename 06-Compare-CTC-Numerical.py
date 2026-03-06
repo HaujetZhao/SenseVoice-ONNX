@@ -9,7 +9,7 @@ def main():
     print("\n[Step 06] CTC 数值比对: Torch (Official) vs ONNX (Dynamo)")
     
     # 1. 路径设置
-    onnx_path = os.path.join(EXPORT_DIR, "sensevoice_ctc.onnx")
+    onnx_path = os.path.join(EXPORT_DIR, "SenseVoice-CTC.fp32.onnx")
     
     # 2. 加载官方 Torch 模型
     print("正在加载官方 Torch 模型 CTC 部分...")
@@ -27,7 +27,7 @@ def main():
         return
         
     print(f"正在加载 CTC ONNX 模型: {onnx_path}")
-    session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+    session = ort.InferenceSession(onnx_path, providers=['DmlExecutionProvider'])
 
     # 4. 准备随机输入数据
     batch_size = 1

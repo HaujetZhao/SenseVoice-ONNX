@@ -107,19 +107,27 @@ class MultiHeadedAttentionSANM(nn.Module):
     def forward_fsmn(self, inputs, mask, mask_shfit_chunk=None):
         b, t, d = inputs.size()
         if mask is not None:
-            mask = torch.reshape(mask, (b, -1, 1))
+            # 确保 mask 维度匹配 (Batch, Time, 1)
+            if mask.dim() == 2:
+                _mask = mask.unsqueeze(-1)
+            elif mask.dim() == 3:
+                _mask = mask.transpose(1, 2) if mask.size(1) == 1 else mask
+            else:
+                _mask = mask
+            
             if mask_shfit_chunk is not None:
-                mask = mask * mask_shfit_chunk
-            inputs = inputs * mask
+                _mask = _mask * mask_shfit_chunk
+            inputs = inputs * _mask
 
         x = inputs.transpose(1, 2)
         x = self.pad_fn(x)
         x = self.fsmn_block(x)
         x = x.transpose(1, 2)
-        x += inputs
+        x = x + inputs
         x = self.dropout(x)
+        
         if mask is not None:
-            x = x * mask
+            x = x * _mask
         return x
 
     def forward_qkv(self, x):
@@ -139,15 +147,11 @@ class MultiHeadedAttentionSANM(nn.Module):
         b, t, d = x.size()
         q_k_v = self.linear_q_k_v(x)
         q, k, v = torch.split(q_k_v, int(self.h * self.d_k), dim=-1)
-        q_h = torch.reshape(q, (b, t, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time1, d_k)
-        k_h = torch.reshape(k, (b, t, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time2, d_k)
-        v_h = torch.reshape(v, (b, t, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time2, d_k)
+        # 使用 unflatten 代替显式指定时间维度 t 的 reshape
+        # 这样对 DML 来说，中间的时间维度是透明的，不会触发动态形状崩溃
+        q_h = q.unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
+        k_h = k.unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
+        v_h = v.unflatten(-1, (self.h, self.d_k)).transpose(1, 2)
 
         return q_h, k_h, v_h, v
 
@@ -169,23 +173,25 @@ class MultiHeadedAttentionSANM(nn.Module):
             if mask_att_chunk_encoder is not None:
                 mask = mask * mask_att_chunk_encoder
 
-            mask = mask.unsqueeze(1).eq(0)  # (batch, 1, *, time2)
-
-            min_value = -float(
-                "inf"
-            )  # float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
-            scores = scores.masked_fill(mask, min_value)
-            attn = torch.softmax(scores, dim=-1).masked_fill(
-                mask, 0.0
-            )  # (batch, head, time1, time2)
+            # 使用 DML 友好的加法掩码替代 masked_fill
+            # mask 为 1 表示有效，0 表示填充
+            # m_addon: 有效区 0.0, 无效区 -10000.0
+            m_addon = (mask.float() - 1.0) * 10000.0
+            if m_addon.dim() == 3:
+                m_addon = m_addon.unsqueeze(1) # (batch, 1, 1, time2)
+            
+            scores = scores + m_addon
+            attn = torch.softmax(scores, dim=-1)
+            # 再次乘以 mask 确保无效区绝对为 0
+            if m_addon.dim() == 4:
+                attn = attn * mask.float().unsqueeze(1)
         else:
             attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
 
         p_attn = self.dropout(attn)
         x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
-        x = (
-            x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
-        )  # (batch, time1, d_model)
+        # 使用 flatten 代替 view(n_batch, -1, dim) 以避免 DML 动态形状崩溃
+        x = x.transpose(1, 2).contiguous().flatten(2)
 
         return self.linear_out(x)  # (batch, time1, d_model)
 
@@ -370,6 +376,14 @@ class EncoderLayerSANM(nn.Module):
                         mask_att_chunk_encoder=mask_att_chunk_encoder,
                     )
                 )
+
+        # Fire-wall Sweeping: 确保残差连接后无效区为 0
+        if mask is not None:
+            _mask = mask.transpose(1, 2) if mask.dim() == 3 and mask.size(1) == 1 else mask
+            if _mask.dim() == 2:
+                _mask = _mask.unsqueeze(-1)
+            x = x * _mask
+
         if not self.normalize_before:
             x = self.norm1(x)
 
@@ -377,6 +391,11 @@ class EncoderLayerSANM(nn.Module):
         if self.normalize_before:
             x = self.norm2(x)
         x = residual + stoch_layer_coeff * self.dropout(self.feed_forward(x))
+
+        # Fire-wall Sweeping
+        if mask is not None:
+            x = x * _mask
+
         if not self.normalize_before:
             x = self.norm2(x)
 
@@ -538,9 +557,16 @@ class SenseVoiceEncoderSmall(nn.Module):
         if masks.dim() == 2:
             masks = masks.unsqueeze(1)
             
+        # 初始掩码处理
+        _masks_sw = masks.transpose(1, 2) if masks.dim() == 3 else masks
+        if _masks_sw.dim() == 2:
+            _masks_sw = _masks_sw.unsqueeze(-1)
+        xs_pad = xs_pad * _masks_sw
+
         xs_pad *= self.output_size() ** 0.5
 
         xs_pad = self.embed(xs_pad)
+        xs_pad = xs_pad * _masks_sw
 
         # forward encoder1
         for layer_idx, encoder_layer in enumerate(self.encoders0):
@@ -552,6 +578,7 @@ class SenseVoiceEncoderSmall(nn.Module):
             xs_pad, masks = encoder_outs[0], encoder_outs[1]
 
         xs_pad = self.after_norm(xs_pad)
+        xs_pad = xs_pad * _masks_sw
 
         # forward encoder2
         # olens = masks.squeeze(1).sum(1).int() # 导出时不需要 olens
@@ -561,6 +588,7 @@ class SenseVoiceEncoderSmall(nn.Module):
             xs_pad, masks = encoder_outs[0], encoder_outs[1]
 
         xs_pad = self.tp_norm(xs_pad)
+        xs_pad = xs_pad * _masks_sw
         return xs_pad
 
 

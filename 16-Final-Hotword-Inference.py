@@ -7,7 +7,7 @@ def main():
     # 1. 初始化引擎 (使用 ASREngineConfig)
     config = ASREngineConfig(
         model_dir="./model",
-        device="cpu",
+        device="dml",
         hotwords=["Fun-ASR-Nano", "事情"]
     )
     engine = SenseVoiceInference(config)
@@ -33,8 +33,7 @@ def main():
         tm = res_obj.timings
         
         print(f" >>> 第 {i} 轮耗时: {tm.total*1000:7.2f}ms | 识别文本: {res_obj.text}")
-        if i == 3:
-            print(f"     [细节] Frontend: {tm.frontend*1000:4.1f}ms | Encoder: {tm.encoder*1000:4.1f}ms | Decoder: {tm.decoder*1000:4.1f}ms | Radar: {tm.radar*1000:4.1f}ms")
+        print(f"     [细节] Frontend: {tm.frontend*1000:4.1f}ms | Encoder: {tm.encoder*1000:4.1f}ms | Decoder: {tm.decoder*1000:4.1f}ms | Radar: {tm.radar*1000:4.1f}ms")
 
     # 4. 展示最后一次的详细结果
     print("\n" + "="*80)
