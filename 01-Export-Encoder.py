@@ -62,9 +62,10 @@ def main():
         input_names=['speech_feat', 'mask', 'prompt_feat'],
         output_names=['encoder_out'],
         dynamic_axes={
-            'speech_feat': {1: 'T'},
-            'mask': {1: 'T'},
-            'encoder_out': {1: 'T_plus_4'}
+            'speech_feat': {0: 'batch', 1: 'T'},
+            'mask': {0: 'batch', 1: 'T'},
+            'prompt_feat': {0: 'batch'},
+            'encoder_out': {0: 'batch', 1: 'T_plus_4'}
         },
         opset_version=18, 
         dynamo=True # 使用 Dynamo 导出模式
