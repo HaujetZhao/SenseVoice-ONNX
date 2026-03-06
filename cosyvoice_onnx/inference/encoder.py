@@ -4,12 +4,11 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceEncoder:
-    def __init__(self, model_dir, device="cpu"):
+    def __init__(self, encoder_path: str, inference_config_path: str, prompt_embed_path: str, device="cpu"):
         # 1. 资源路径
-        self.model_dir = Path(model_dir)
-        inference_config_path = self.model_dir / "inference_config.json"
-        prompt_embed_path = self.model_dir / "prompt_embed.npy"
-        enc_onnx = self.model_dir / "sensevoice_encoder.onnx"
+        encoder_path = Path(encoder_path)
+        inference_config_path = Path(inference_config_path)
+        prompt_embed_path = Path(prompt_embed_path)
 
         # 2. 加载资源
         if not inference_config_path.exists():
@@ -28,7 +27,7 @@ class SenseVoiceEncoder:
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
         print(f"[Encoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
-        self.session = ort.InferenceSession(str(enc_onnx), providers=providers, sess_options=session_opts)
+        self.session = ort.InferenceSession(str(encoder_path), providers=providers, sess_options=session_opts)
 
     def construct_prompt(self, lid="auto", itn=True):
         """构造 4 帧 Prompt Embedding"""

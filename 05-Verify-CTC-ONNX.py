@@ -6,7 +6,7 @@ from export_config import EXPORT_DIR
 def main():
     print("\n[Step 05] 验证 CTC ONNX 模型推理...")
     
-    onnx_path = os.path.join(EXPORT_DIR, "sensevoice_ctc.onnx")
+    onnx_path = os.path.join(EXPORT_DIR, "SenseVoice-CTC.fp32.onnx")
     if not os.path.exists(onnx_path):
         print(f"❌ 错误: 找不到模型文件 {onnx_path}")
         return
@@ -24,7 +24,7 @@ def main():
     enc_out = np.random.randn(batch_size, T_plus_4, 512).astype(np.float32)
 
     # 3. 执行推理
-    print("开始 CTC ONNX 推理 (CPU)...")
+    print("开始 CTC ONNX 推理...")
     inputs = {"enc_out": enc_out}
     outputs = session.run(None, inputs)
     log_probs = outputs[0]

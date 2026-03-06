@@ -19,32 +19,46 @@ class SenseVoiceInference:
     - 动态 Prompt 构造
     - ONNX CPU/DML 支持
     """
-    def __init__(self, model_dir_or_config, device="cpu", hotwords: list = None):
-        if isinstance(model_dir_or_config, ASREngineConfig):
-            self.config = model_dir_or_config
-            self.model_dir = Path(self.config.model_dir)
-            self.device = self.config.device
-            init_hotwords = self.config.hotwords
-        else:
-            self.model_dir = Path(model_dir_or_config)
-            self.device = device
-            init_hotwords = hotwords
+    def __init__(self, config: ASREngineConfig):
+        """
+        初始化 SenseVoice 推理引擎
+        只接受 ASREngineConfig 实例，所有参数均封装在其中。
+        """
+        self.config = config
+        self.device = config.device
+        model_dir = Path(config.model_dir)
+            
+        # 1. 内部路径解析 (统一映射逻辑)
+        encoder_path = model_dir / "SenseVoice-Encoder.fp32.onnx"
+        decoder_path = model_dir / "SenseVoice-CTC.fp32.onnx"
+        tokenizer_path = model_dir / "tokenizer.bpe.model"
+        inference_config_path = model_dir / "inference_config.json"
+        prompt_embed_path = model_dir / "prompt_embed.npy"
 
-        # 1. 编码器、解码器与前端
-        self.encoder = SenseVoiceEncoder(self.model_dir, device=self.device)
-        self.decoder = SenseVoiceDecoder(self.model_dir, device=self.device)
+        # 2. 构造编码器、解码器与前端
+        self.encoder = SenseVoiceEncoder(
+            encoder_path=encoder_path, 
+            inference_config_path=inference_config_path, 
+            prompt_embed_path=prompt_embed_path, 
+            device=self.device
+        )
+        self.decoder = SenseVoiceDecoder(
+            decoder_path=decoder_path, 
+            device=self.device
+        )
         self.frontend = NumPyMelExtractor()
-        
-        # 2. 资源路径
-        tokenizer_path = self.model_dir / "tokenizer.bpe.model"
         
         # 3. 初始化分词器
         self.sp = spm.SentencePieceProcessor()
         self.sp.load(str(tokenizer_path))
         
-        # 4. 初始化热词雷达 (默认为空或使用传入值)
+        # 4. 初始化热词雷达 (从配置中获取)
         self.radar = None
-        self.set_hotwords(init_hotwords or [])
+        if self.config.hotwords:
+            self.set_hotwords(self.config.hotwords)
+            
+        # 5. 结果整合器
+        self.integrator = ResultIntegrator()
 
     def set_hotwords(self, hotwords):
         """

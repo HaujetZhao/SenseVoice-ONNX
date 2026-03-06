@@ -15,7 +15,7 @@ def main():
     
     # 1. 准备目录
     os.makedirs(EXPORT_DIR, exist_ok=True)
-    onnx_path = EXPORT_DIR / "sensevoice_ctc.onnx"
+    onnx_path = EXPORT_DIR / "SenseVoice-CTC.fp32.onnx"
     
     # 2. 加载官方模型获取 CTC 部分
     print(f"正在从 {MODEL_DIR} 提取 CTC 权重...")

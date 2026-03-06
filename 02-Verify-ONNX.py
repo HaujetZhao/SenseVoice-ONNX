@@ -6,7 +6,7 @@ from export_config import EXPORT_DIR
 def main():
     print("\n[Step 02] 验证 ONNX 模型推理...")
     
-    onnx_path = os.path.join(EXPORT_DIR, "sensevoice_encoder.onnx")
+    onnx_path = os.path.join(EXPORT_DIR, "SenseVoice-Encoder.fp32.onnx")
     if not os.path.exists(onnx_path):
         print(f"❌ 错误: 找不到模型文件 {onnx_path}")
         return
@@ -15,7 +15,7 @@ def main():
     print(f"正在加载 ONNX 模型: {onnx_path}")
     sess_options = ort.SessionOptions()
     # 强制使用 CPU
-    providers = ['CPUExecutionProvider']
+    providers = ['DmlExecutionProvider']
     session = ort.InferenceSession(onnx_path, sess_options, providers=providers)
 
     # 2. 准备随机输入
@@ -29,7 +29,7 @@ def main():
     prompt_feat = np.random.randn(batch_size, 4, 560).astype(np.float32)
 
     # 3. 执行推理
-    print("开始 ONNX 推理 (CPU)...")
+    print("开始 ONNX 推理...")
     inputs = {
         "speech_feat": speech_feat,
         "mask": mask,

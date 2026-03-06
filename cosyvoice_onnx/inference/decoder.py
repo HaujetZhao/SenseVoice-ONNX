@@ -4,10 +4,9 @@ import onnxruntime as ort
 from .ctc import greedy_search, topk_search
 
 class SenseVoiceDecoder:
-    def __init__(self, model_dir, device="cpu"):
+    def __init__(self, decoder_path: str, device="cpu"):
         # 1. 资源路径
-        self.model_dir = Path(model_dir)
-        ctc_onnx = self.model_dir / "sensevoice_ctc.onnx"
+        decoder_path = Path(decoder_path)
         
         # 2. 初始化会话
         providers = ['CPUExecutionProvider']
@@ -18,7 +17,7 @@ class SenseVoiceDecoder:
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
         print(f"[Decoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
-        self.session = ort.InferenceSession(str(ctc_onnx), providers=providers, sess_options=session_opts)
+        self.session = ort.InferenceSession(str(decoder_path), providers=providers, sess_options=session_opts)
 
     def forward(self, enc_out):
         """执行 CTC Head 推理，获取 log_probs"""

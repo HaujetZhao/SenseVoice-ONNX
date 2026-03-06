@@ -10,7 +10,7 @@ def main():
     print("\n[Step 03] 数值比对: Torch (Official) vs ONNX (Dynamo)")
     
     # 1. 路径设置
-    onnx_path = os.path.join(EXPORT_DIR, "sensevoice_encoder.onnx")
+    onnx_path = os.path.join(EXPORT_DIR, "SenseVoice-Encoder.fp32.onnx")
     
     # 2. 加载官方 Torch 模型 (使用最原始的定义进行基准测试)
     print("正在加载官方 Torch 模型作为基准...")

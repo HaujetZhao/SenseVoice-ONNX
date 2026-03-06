@@ -17,7 +17,7 @@ def main():
     
     # 1. 准备目录
     os.makedirs(EXPORT_DIR, exist_ok=True)
-    onnx_path = EXPORT_DIR / "sensevoice_encoder.onnx"
+    onnx_path = EXPORT_DIR / "SenseVoice-Encoder.fp32.onnx"
     
     # 2. 加载官方原始模型以获取权重
     print(f"正在从 {MODEL_DIR} 加载官方模型权重...")
