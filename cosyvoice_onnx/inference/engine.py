@@ -4,6 +4,7 @@ import numpy as np
 import onnxruntime as ort
 import sentencepiece as spm
 from .audio import NumPyMelExtractor
+from .encoder import SenseVoiceEncoder
 from .ctc import greedy_search
 
 class SenseVoiceInference:
@@ -16,134 +17,63 @@ class SenseVoiceInference:
     def __init__(self, model_dir, device="cpu"):
         self.model_dir = model_dir
         
-        # 1. 资源路径
-        inference_config_path = os.path.join(model_dir, "inference_config.json")
-        prompt_embed_path = os.path.join(model_dir, "prompt_embed.npy")
+        # 1. 编码器与前端
+        self.encoder = SenseVoiceEncoder(model_dir, device=device)
+        self.frontend = NumPyMelExtractor()
+        
+        # 2. 资源路径
         tokenizer_path = os.path.join(model_dir, "tokenizer.bpe.model")
-        enc_onnx = os.path.join(model_dir, "sensevoice_encoder.onnx")
         ctc_onnx = os.path.join(model_dir, "sensevoice_ctc.onnx")
-
-        # 2. 检查并加载资源
-        if not os.path.exists(inference_config_path):
-            raise FileNotFoundError(f"找不到配置: {inference_config_path}")
-            
-        with open(inference_config_path, "r", encoding="utf-8") as f:
-            self.config = json.load(f)
-        self.prompt_embed = np.load(prompt_embed_path)
         
         # 3. 初始化分词器
         self.sp = spm.SentencePieceProcessor()
         self.sp.load(tokenizer_path)
         
-        # 4. 初始化会话
+        # 3. 初始化 CTC 会话
         providers = ['CPUExecutionProvider']
         if device.lower() == "dml":
             providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
         
         session_opts = ort.SessionOptions()
-        session_opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
-        session_opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
-        print(f"[SenseVoice] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
-        self.enc_sess = ort.InferenceSession(enc_onnx, providers=providers, sess_options=session_opts)
+        print(f"[SenseVoice-CTC] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
         self.ctc_sess = ort.InferenceSession(ctc_onnx, providers=providers, sess_options=session_opts)
-        
-        # 5. 特征提取组件
-        self.frontend = NumPyMelExtractor()
-
-    def construct_prompt(self, lid="auto", itn=True):
-        """构造 4 帧 Prompt Embedding"""
-        lid_dict = self.config.get("lid_dict", {})
-        itn_dict = self.config.get("textnorm_dict", {})
-        
-        lid_idx = lid_dict.get(lid, 3) 
-        itn_str = "withitn" if itn else "woitn"
-        itn_idx = itn_dict.get(itn_str, 14)
-        
-        # 拼接: Language(1) -> Event_Emo(2) -> Style(1)
-        lid_vec = self.prompt_embed[lid_idx:lid_idx+1]
-        event_emo_vec = self.prompt_embed[1:3]
-        style_vec = self.prompt_embed[itn_idx:itn_idx+1]
-        
-        prompt = np.concatenate([lid_vec, event_emo_vec, style_vec], axis=0)
-        return prompt[np.newaxis, ...].astype(np.float32)
 
     def __call__(self, audio_data: np.ndarray, lid="zh", itn=True):
-        """
-        执行推理流程，greedy 采样
-        Args:
-            audio_data: (T,) NumPy 数组 (16k 采样率)
-        """
-        # 1. 提取 LFR 特征 (NumPy)
+        # 1. 前端与编码
         lfr_feat = self.frontend.extract(audio_data)
+        enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         
-        # 2. 准备 Prompt & Mask
-        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
-        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
-        
-        # 3. Encoder 推理
-        enc_out = self.enc_sess.run(None, {
-            "speech_feat": lfr_feat[np.newaxis, ...], 
-            "mask": mask, 
-            "prompt_feat": prompt_feat
-        })[0]
-        
-        # 4. CTC 推理 (Decoder Head)
+        # 2. CTC 解码
         log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
-        
-        # 5. 解码
-        # greedy_search 现在返回 List[dict]
         greedy_res = greedy_search(log_probs, self.sp, blank_id=0, prompt_len=4)
-        text = "".join([item['text'] for item in greedy_res])
-        
-        return text
+        return "".join([item['text'] for item in greedy_res])
 
     def recognize_topk(self, audio_data: np.ndarray, top_k=40, lid="zh", itn=True):
-        """
-        推理并获取每帧的 Top-K 候选词极其概率 (用于热词召回分析)
-        返回: topk_data, greedy_text
-        """
-        # 1. 提取 LFR 特征
+        # 1. 前端与编码
         lfr_feat = self.frontend.extract(audio_data)
+        enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         
-        # 2. 准备 Prompt & Mask
-        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
-        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
-        
-        # 3. Encoder 推理
-        enc_out = self.enc_sess.run(None, {
-            "speech_feat": lfr_feat[np.newaxis, ...], 
-            "mask": mask, 
-            "prompt_feat": prompt_feat
-        })[0]
-        
-        # 4. CTC 推理
+        # 2. CTC 解码与 Top-K
         log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
-        
-        # 5. 多路径解析
         from .ctc import greedy_search, topk_search
-        
-        # 路径 A: 快速贪婪
         greedy_res = greedy_search(log_probs, self.sp, blank_id=0, prompt_len=4)
         greedy_text = "".join([item['text'] for item in greedy_res])
-        
-        # 路径 B: 保留每帧 Top-K (用于后续 Radar 处理)
         topk_data = topk_search(log_probs, self.sp, top_k=top_k, blank_id=0, prompt_len=4)
-        
         return topk_data, greedy_text
+
 
     def recognize_with_hotwords(self, audio_data: np.ndarray, hotwords: list, lid="zh", itn=True, top_k: int = 20):
         """
         [核心] 带有热词替换功能的推理
         返回: List[dict] -> [{'text': '...', 'start': ...}, ...]
         """
-        # 1. 获取基础数据 (带有时间戳的 greedy 序列)
+        # 1. 前端与编码
         lfr_feat = self.frontend.extract(audio_data)
-        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
-        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
+        enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         
-        enc_out = self.enc_sess.run(None, {"speech_feat": lfr_feat[np.newaxis, ...], "mask": mask, "prompt_feat": prompt_feat})[0]
+        # 2. CTC 推理
         log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
         
         from .ctc import greedy_search, topk_search

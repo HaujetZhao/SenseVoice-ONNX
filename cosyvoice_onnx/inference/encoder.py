@@ -1,0 +1,67 @@
+import os
+import json
+import numpy as np
+import onnxruntime as ort
+
+class SenseVoiceEncoder:
+    def __init__(self, model_dir, device="cpu"):
+        # 1. 资源路径
+        inference_config_path = os.path.join(model_dir, "inference_config.json")
+        prompt_embed_path = os.path.join(model_dir, "prompt_embed.npy")
+        enc_onnx = os.path.join(model_dir, "sensevoice_encoder.onnx")
+
+        # 2. 加载资源
+        if not os.path.exists(inference_config_path):
+            raise FileNotFoundError(f"找不到配置: {inference_config_path}")
+            
+        with open(inference_config_path, "r", encoding="utf-8") as f:
+            self.config = json.load(f)
+        self.prompt_embed = np.load(prompt_embed_path)
+        
+        # 3. 初始化会话
+        providers = ['CPUExecutionProvider']
+        if device.lower() == "dml":
+            providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+        
+        session_opts = ort.SessionOptions()
+        session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        print(f"[Encoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
+        self.session = ort.InferenceSession(enc_onnx, providers=providers, sess_options=session_opts)
+
+    def construct_prompt(self, lid="auto", itn=True):
+        """构造 4 帧 Prompt Embedding"""
+        lid_dict = self.config.get("lid_dict", {})
+        itn_dict = self.config.get("textnorm_dict", {})
+        
+        lid_idx = lid_dict.get(lid, 3) 
+        itn_str = "withitn" if itn else "woitn"
+        itn_idx = itn_dict.get(itn_str, 14)
+        
+        # 核心逻辑镜像 engine.py: Language(1) -> Event_Emo(2) -> Style(1)
+        lid_vec = self.prompt_embed[lid_idx:lid_idx+1]
+        event_emo_vec = self.prompt_embed[1:3]
+        style_vec = self.prompt_embed[itn_idx:itn_idx+1]
+        
+        prompt = np.concatenate([lid_vec, event_emo_vec, style_vec], axis=0)
+        return prompt[np.newaxis, ...].astype(np.float32)
+
+    def forward(self, lfr_feat, lid="zh", itn=True):
+        """
+        执行 Encoder 推理
+        返回: enc_out (1, T+4, 512)
+        """
+        # 1. 构造 Prompt
+        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
+        
+        # 2. 构造 Mask
+        mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
+        
+        # 3. 推理
+        enc_out = self.session.run(None, {
+            "speech_feat": lfr_feat[np.newaxis, ...],
+            "mask": mask,
+            "prompt_feat": prompt_feat
+        })[0]
+        
+        return enc_out
