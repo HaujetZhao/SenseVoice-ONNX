@@ -113,9 +113,10 @@ class ASREngineConfig:
     model_dir: str
     device: str = "cpu"
     hotwords: Optional[Any] = None
-    top_k: int = 20
+    top_k: int = 10
     itn: bool = True
     pad_to: int = 30
+    precision: str = "fp16"
 
 
 # ==================== 导出列表 ====================
