@@ -32,17 +32,24 @@ class EncoderExportWrapper(nn.Module):
 
 class CTCExportWrapper(nn.Module):
     """
-    SenseVoice CTC 解码头导出包装器
+    SenseVoice CTC 解码头导出包装器 (TopK 优化版)
     输入:
-        - enc_out: (Batch, T_plus_4, 512) -> Encoder 的输出向量
+        - enc_out: (Batch, T_plus_4, 512)
     输出:
-        - log_probs: (Batch, T_plus_4, Vocab)
+        - topk_log_probs: (Batch, T_plus_4, 100) -> 前 100 个最大对数概率
+        - topk_indices: (Batch, T_plus_4, 100) -> 对应的字符 ID
     """
-    def __init__(self, ctc):
+    def __init__(self, ctc, k=100):
         super().__init__()
         self.ctc = ctc
+        self.k = k
 
     def forward(self, enc_out: torch.Tensor):
-        # CTC 通常包含一个线性层和 log_softmax
-        # 在 funasr 的 CTC 实现中，可以直接调用 log_softmax 方法
-        return self.ctc.log_softmax(enc_out)
+        # 1. 计算全量 Log Softmax
+        log_probs = self.ctc.log_softmax(enc_out)
+        
+        # 2. 在 GPU 侧直接提取 TopK
+        # 这将极大减少 DML 的回传数据量 (1.2M -> 5KB)
+        topk_log_probs, topk_indices = torch.topk(log_probs, self.k, dim=-1)
+        
+        return topk_log_probs, topk_indices.to(torch.int32)

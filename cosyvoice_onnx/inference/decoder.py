@@ -41,54 +41,80 @@ class SenseVoiceDecoder:
         print("[Decoder] DML 预热完成。")
 
     def forward(self, enc_out):
-        """执行 CTC Head 推理，获取 log_probs"""
+        """
+        执行 CTC Head 推理
+        返回: 
+            topk_log_probs: (1, T, 100)
+            topk_indices: (1, T, 100)
+        """
         # 确保输入精度正确
         if enc_out.dtype != self.input_dtype:
             enc_out = enc_out.astype(self.input_dtype)
             
-        print(f"[Decoder] 推理：输入形状 {enc_out.shape}")
-        log_probs = self.session.run(None, {"enc_out": enc_out})[0]
-        return log_probs
+        print(f"[Decoder] DML 推理：输入形状 {enc_out.shape}")
+        # 现在模型有两个输出
+        topk_log_probs, topk_indices = self.session.run(None, {"enc_out": enc_out})
+        return topk_log_probs, topk_indices
 
     def decode_greedy(self, enc_out, sp, blank_id=0, prompt_len=4, T_valid=None):
-        """封装贪婪搜索"""
-        log_probs = self.forward(enc_out)
+        """
+        封装贪婪搜索 (使用模型返回的 Top-1)
+        """
+        _, topk_indices = self.forward(enc_out)
         
-        # 如果提供了有效长度，则切片以加速后续 CPU 处理
+        # 取 Top-1 索引进行 CTC 解码
+        # topk_indices 形状是 (1, T, 100) -> 取 (1, T, 0)
+        log_probs_placeholder = np.zeros((1, topk_indices.shape[1], 1), dtype=np.float32)
+        
+        # 为了兼容原有的 greedy_search 逻辑，我们构造一个只包含 Top-1 的假 log_probs
+        # 或者直接修改输出逻辑。这里我们对 topk_indices 进行切片处理
         if T_valid is not None:
-            log_probs = log_probs[:, :T_valid + prompt_len, :]
+            active_indices = topk_indices[0, prompt_len : T_valid + prompt_len, 0]
+        else:
+            active_indices = topk_indices[0, prompt_len:, 0]
             
-        return greedy_search(log_probs, sp, blank_id=blank_id, prompt_len=prompt_len)
+        # 连续去重
+        collapsed = []
+        if len(active_indices) > 0:
+            current_id = active_indices[0]
+            start_frame = 0
+            for i in range(1, len(active_indices)):
+                if active_indices[i] != current_id:
+                    collapsed.append((current_id, start_frame))
+                    current_id = active_indices[i]
+                    start_frame = i
+            collapsed.append((current_id, start_frame))
+
+        results = []
+        for token_id, frame_idx in collapsed:
+            if token_id == blank_id: continue
+            token_id = int(token_id)
+            char = sp.id_to_piece(token_id)
+            if not char.strip(): continue
+            results.append({
+                "text": char,
+                "start": round(frame_idx * 0.060, 3)
+            })
+        return results
 
     def get_topk_space(self, enc_out, top_k=20, T_valid=None):
         """
-        准备 Numba 雷达所需的搜索空间
-        Args:
-            enc_out: Encoder 输出 (B, T, D)
-            top_k: Top-K 深度
-            T_valid: 有效帧数 (LFR 步数)
-        返回: topk_indices, topk_probs, top1_indices, log_probs
+        准备 Numba 雷达所需的搜索空间 (直接利用模型 TopK 输出)
+        返回: topk_indices, topk_probs, top1_indices, log_probs_dummy
         """
-        log_probs = self.forward(enc_out)
+        topk_log_probs, topk_indices = self.forward(enc_out)
         
-        # 核心优化：在 CPU 处理 (exp, argsort) 前先切回有效长度
-        # 同时保留 log_probs 变量供后续 greedy_search 使用（如果需要）
-        if T_valid is not None:
-            valid_log_probs = log_probs[:, 4:T_valid + 4, :]
-        else:
-            valid_log_probs = log_probs[:, 4:, :]
-            
-        # 计算概率
-        probs = np.exp(valid_log_probs[0, :, :])
+        # 1. 切片到有效长度 (跳过 Prompt)
+        # 注意：模型已经帮我们在 GPU 上排好序了，我们只需要取前 top_k 个即可
+        start = 4
+        end = (T_valid + 4) if T_valid is not None else topk_indices.shape[1]
         
-        # 获取 Top-K 索引
-        topk_indices = np.argsort(-probs, axis=-1)[:, :top_k].astype(np.int32)
+        # 裁剪到请求的 top_k 深度 (模型默认输出 100)
+        final_indices = topk_indices[0, start:end, :top_k].astype(np.int32)
+        # 将对数概率转回概率 [0, 1] 供雷达使用
+        final_probs = np.exp(topk_log_probs[0, start:end, :top_k].astype(np.float32))
         
-        # 获取 Top-K 概率
-        topk_probs = np.zeros((probs.shape[0], top_k), dtype=np.float32)
-        for t in range(probs.shape[0]):
-            topk_probs[t] = probs[t, topk_indices[t]]
-            
-        top1_indices = topk_indices[:, 0]
+        top1_indices = final_indices[:, 0]
         
-        return topk_indices, topk_probs, top1_indices, log_probs
+        # 为了保持接口兼容性，返回一个空的 log_probs 占位符
+        return final_indices, final_probs, top1_indices, None

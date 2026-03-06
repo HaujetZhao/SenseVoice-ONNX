@@ -46,10 +46,11 @@ def main():
         (dummy_enc_out,), 
         str(onnx_path),
         input_names=['enc_out'],
-        output_names=['log_probs'],
+        output_names=['topk_log_probs', 'topk_indices'],
         dynamic_axes={
             'enc_out': {1: 'T_plus_4'},
-            'log_probs': {1: 'T_plus_4'}
+            'topk_log_probs': {1: 'T_plus_4'},
+            'topk_indices': {1: 'T_plus_4'}
         },
         opset_version=18,
         dynamo=True # 同样使用 Dynamo 模式

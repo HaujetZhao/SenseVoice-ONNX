@@ -133,10 +133,10 @@ class SenseVoiceInference:
         enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         t_encoder = time.perf_counter() - t0
         
-        # 3. 解码器获取搜索空间
+        # 3. 解码器获取搜索空间 (已集成 TopK)
         t0 = time.perf_counter()
         T_valid = lfr_feat.shape[0]
-        topk_indices, topk_probs, top1_indices, log_probs = self.decoder.get_topk_space(enc_out, top_k=top_k, T_valid=T_valid)
+        topk_indices, topk_probs, top1_indices, _ = self.decoder.get_topk_space(enc_out, top_k=top_k, T_valid=T_valid)
         t_decoder = time.perf_counter() - t0
         
         # 4. 运行并行扫描 (Numba)
@@ -144,8 +144,8 @@ class SenseVoiceInference:
         detected_hotwords = self.radar.scan(topk_indices, topk_probs, top1_indices)
         t_radar = time.perf_counter() - t0
         
-        # 5. 准备基础 Greedy 序列
-        greedy_results = greedy_search(log_probs[:, :T_valid+4, :], self.sp, prompt_len=4)
+        # 5. 直接从解码器获取 Greedy 序列
+        greedy_results = self.decoder.decode_greedy(enc_out, self.sp, prompt_len=4, T_valid=T_valid)
         
         # 6. 调用整合器进行碰撞检测与 Token 块合成
         t0 = time.perf_counter()
