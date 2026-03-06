@@ -5,7 +5,8 @@ import onnxruntime as ort
 import sentencepiece as spm
 from .audio import NumPyMelExtractor
 from .encoder import SenseVoiceEncoder
-from .ctc import greedy_search
+from .decoder import SenseVoiceDecoder
+from .ctc import greedy_search, topk_search
 
 class SenseVoiceInference:
     """
@@ -17,37 +18,25 @@ class SenseVoiceInference:
     def __init__(self, model_dir, device="cpu"):
         self.model_dir = model_dir
         
-        # 1. 编码器与前端
+        # 1. 编码器、解码器与前端
         self.encoder = SenseVoiceEncoder(model_dir, device=device)
+        self.decoder = SenseVoiceDecoder(model_dir, device=device)
         self.frontend = NumPyMelExtractor()
         
         # 2. 资源路径
         tokenizer_path = os.path.join(model_dir, "tokenizer.bpe.model")
-        ctc_onnx = os.path.join(model_dir, "sensevoice_ctc.onnx")
         
         # 3. 初始化分词器
         self.sp = spm.SentencePieceProcessor()
         self.sp.load(tokenizer_path)
-        
-        # 3. 初始化 CTC 会话
-        providers = ['CPUExecutionProvider']
-        if device.lower() == "dml":
-            providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
-        
-        session_opts = ort.SessionOptions()
-        session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        
-        print(f"[SenseVoice-CTC] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
-        self.ctc_sess = ort.InferenceSession(ctc_onnx, providers=providers, sess_options=session_opts)
 
     def __call__(self, audio_data: np.ndarray, lid="zh", itn=True):
         # 1. 前端与编码
         lfr_feat = self.frontend.extract(audio_data)
         enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         
-        # 2. CTC 解码
-        log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
-        greedy_res = greedy_search(log_probs, self.sp, blank_id=0, prompt_len=4)
+        # 2. 调用解码器生成贪婪序列
+        greedy_res = self.decoder.decode_greedy(enc_out, self.sp, blank_id=0, prompt_len=4)
         return "".join([item['text'] for item in greedy_res])
 
     def recognize_topk(self, audio_data: np.ndarray, top_k=40, lid="zh", itn=True):
@@ -55,9 +44,8 @@ class SenseVoiceInference:
         lfr_feat = self.frontend.extract(audio_data)
         enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         
-        # 2. CTC 解码与 Top-K
-        log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
-        from .ctc import greedy_search, topk_search
+        # 2. 调用解码器
+        log_probs = self.decoder.forward(enc_out)
         greedy_res = greedy_search(log_probs, self.sp, blank_id=0, prompt_len=4)
         greedy_text = "".join([item['text'] for item in greedy_res])
         topk_data = topk_search(log_probs, self.sp, top_k=top_k, blank_id=0, prompt_len=4)
@@ -73,20 +61,10 @@ class SenseVoiceInference:
         lfr_feat = self.frontend.extract(audio_data)
         enc_out = self.encoder.forward(lfr_feat, lid=lid, itn=itn)
         
-        # 2. CTC 推理
-        log_probs = self.ctc_sess.run(None, {"enc_out": enc_out})[0]
+        # 2. 获取并行雷达所需的搜索空间
+        topk_indices, topk_probs, top1_indices, log_probs = self.decoder.get_topk_space(enc_out, top_k=top_k)
         
-        from .ctc import greedy_search, topk_search
         from .numba_radar import FastHotwordRadar
-        
-        # 1. 准备搜索空间 (Top-K 概率和索引)
-        probs = np.exp(log_probs[0, 4:, :])
-        topk_indices = np.argsort(-probs, axis=-1)[:, :top_k].astype(np.int32)
-        topk_probs = np.zeros((probs.shape[0], top_k), dtype=np.float32)
-        for t in range(probs.shape[0]):
-            topk_probs[t] = probs[t, topk_indices[t]]
-        
-        top1_indices = topk_indices[:, 0]
         
         # 2. 运行 Numba 并行雷达
         radar = FastHotwordRadar(hotwords, self.sp)
