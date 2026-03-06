@@ -1,29 +1,21 @@
 import time
 import numpy as np
 import librosa
-from cosyvoice_onnx.inference import SenseVoiceInference
+from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig
 from cosyvoice_onnx.inference.numba_radar import FastHotwordRadar
 
 def main():
-    # 1. 初始化
-    engine = SenseVoiceInference("./model", device="cpu")
+    # 1. 初始化引擎
+    config = ASREngineConfig(model_dir="./model", device="cpu")
+    engine = SenseVoiceInference(config)
     audio, _ = librosa.load(r"d:\cosyvoice\test-fun.mp3", sr=16000)
     
-    # 3. 准备搜索空间 (Top-K 概率和索引)
+    # 2. 准备搜索空间 (Top-K 概率和索引)
     lfr_feat = engine.frontend.extract(audio)
     enc_out = engine.encoder.forward(lfr_feat, lid="zh")
-    log_probs = engine.ctc_sess.run(None, {"enc_out": enc_out})[0]
     
-    # 准备 Numba 需要的输入
-    T_total = log_probs.shape[1] - 4
-    K = 20
-    probs = np.exp(log_probs[0, 4:, :])
-    topk_indices = np.argsort(-probs, axis=-1)[:, :K].astype(np.int32)
-    topk_probs = np.zeros((T_total, K), dtype=np.float32)
-    for t in range(T_total):
-        topk_probs[t] = probs[t, topk_indices[t]]
-    
-    top1_indices = topk_indices[:, 0]
+    # 直接调用重构后的解码器方法获取搜索空间
+    topk_indices, topk_probs, top1_indices, log_probs = engine.decoder.get_topk_space(enc_out, top_k=20)
     
     # 2. 构造 5000 个热词的巨大列表
     # 包含目标词
