@@ -25,9 +25,10 @@ def main():
     audio, _ = librosa.load(audio_path, sr=16000)
     
     # 3. 运行推理 (连续三遍测试速度)
-    print(f"\n[Performance] 开始三连测测试...")
+    print(f"\n[Performance] 开始三连测测试 (此时 Radar 已持有 {len(config.hotwords)} 个热词)...")
     
-    for i in range(1, 4):
+    for i in range(1, 6):
+        # 此时引擎内部已持有 radar，不会重复构建索引
         res_obj = engine.recognize(audio, lid="zh")
         tm = res_obj.timings
         

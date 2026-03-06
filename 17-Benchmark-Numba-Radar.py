@@ -34,13 +34,20 @@ def main():
     # 4. 执行多核并行扫描 (预热)
     radar.scan(topk_indices, topk_probs, top1_indices)
     
-    # 5. 正式测速
-    t1 = time.time()
-    hits = radar.scan(topk_indices, topk_probs, top1_indices)
-    t2 = time.time()
+    # 5. 正式测速 (运行 10 次)
+    print(f"\n🔥 开始性能实测 (10 次迭代):")
+    durations = []
+    for i in range(1, 11):
+        t1 = time.perf_counter()
+        hits = radar.scan(topk_indices, topk_probs, top1_indices)
+        t2 = time.perf_counter()
+        
+        d = (t2 - t1) * 1000
+        durations.append(d)
+        print(f"  >>> 第 {i:2d} 次耗时: {d:6.3f}ms")
     
-    print(f"🎯 扫描成功，命中数量: {len(hits)}")
-    print(f"🔥 [万词并行扫描耗时]: {(t2-t1)*1000:.2f}ms")
+    avg_d = sum(durations) / len(durations)
+    print(f"\n� 平均扫描耗时: {avg_d:6.3f}ms | 命中数量: {len(hits)}")
     
     # 打印部分结果校验
     print("\n命中示例 (详细时间轴):")
