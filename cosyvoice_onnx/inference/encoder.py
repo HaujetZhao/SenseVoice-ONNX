@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 import json
 import numpy as np
 import onnxruntime as ort
@@ -6,12 +6,13 @@ import onnxruntime as ort
 class SenseVoiceEncoder:
     def __init__(self, model_dir, device="cpu"):
         # 1. 资源路径
-        inference_config_path = os.path.join(model_dir, "inference_config.json")
-        prompt_embed_path = os.path.join(model_dir, "prompt_embed.npy")
-        enc_onnx = os.path.join(model_dir, "sensevoice_encoder.onnx")
+        self.model_dir = Path(model_dir)
+        inference_config_path = self.model_dir / "inference_config.json"
+        prompt_embed_path = self.model_dir / "prompt_embed.npy"
+        enc_onnx = self.model_dir / "sensevoice_encoder.onnx"
 
         # 2. 加载资源
-        if not os.path.exists(inference_config_path):
+        if not inference_config_path.exists():
             raise FileNotFoundError(f"找不到配置: {inference_config_path}")
             
         with open(inference_config_path, "r", encoding="utf-8") as f:
@@ -27,7 +28,7 @@ class SenseVoiceEncoder:
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
         print(f"[Encoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
-        self.session = ort.InferenceSession(enc_onnx, providers=providers, sess_options=session_opts)
+        self.session = ort.InferenceSession(str(enc_onnx), providers=providers, sess_options=session_opts)
 
     def construct_prompt(self, lid="auto", itn=True):
         """构造 4 帧 Prompt Embedding"""
