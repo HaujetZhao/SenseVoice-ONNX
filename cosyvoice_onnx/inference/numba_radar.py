@@ -30,6 +30,11 @@ def numba_parallel_scan(
         
         t_ptr = 0
         while t_ptr < T:
+            # 【第 1 步优化】触发式扫描：如果当前帧 Greedy 是空白，不将其作为搜索起点
+            if top1_indices[t_ptr] == blank_id:
+                t_ptr += 1
+                continue
+                
             current_token_idx = 0
             search_ptr = t_ptr
             
