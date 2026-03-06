@@ -1,7 +1,8 @@
 import os
 import librosa
 import numpy as np
-from cosyvoice_onnx.inference import SenseVoiceInference, HotwordRadar
+from cosyvoice_onnx.inference import SenseVoiceInference
+from cosyvoice_onnx.inference.numba_radar import FastHotwordRadar
 
 def main():
     # 1. 初始化引擎
@@ -28,27 +29,31 @@ def main():
     # 但由于 topk_search 已经转成了 char，我们需要一个能跟 radar 对接的版本
     # 实际上，engine 内部在调用 recognize_with_hotwords 时已经做了这些
     
-    # 为了演示，我们手动模拟一次 radar 的扫描过程
-    from cosyvoice_onnx.inference.ctc import greedy_search
     # 推理一次获取原始 log_probs
     lfr_feat = engine.frontend.extract(audio)
-    prompt_feat = engine.construct_prompt(lid="zh")
-    mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
-    enc_out = engine.enc_sess.run(None, {"speech_feat": lfr_feat[np.newaxis, ...], "mask": mask, "prompt_feat": prompt_feat})[0]
+    enc_out = engine.encoder.forward(lfr_feat, lid="zh")
     log_probs = engine.ctc_sess.run(None, {"enc_out": enc_out})[0]
     
-    top1_indices = np.argmax(log_probs[0, 4:, :], axis=-1)
-    radar = HotwordRadar(topk_frames)
+    # 准备 Numba 格式的 Top-K 数组
+    probs = np.exp(log_probs[0, 4:, :])
+    top_k = 20
+    topk_indices = np.argsort(-probs, axis=-1)[:, :top_k].astype(np.int32)
+    topk_probs = np.zeros((probs.shape[0], top_k), dtype=np.float32)
+    for t in range(probs.shape[0]):
+        topk_probs[t] = probs[t, topk_indices[t]]
+    top1_indices = topk_indices[:, 0]
     
-    # 合并搜集所有热词的 match_map
+    # 运行扫描
+    radar = FastHotwordRadar(hotwords, engine.sp)
+    detected = radar.scan(topk_indices, topk_probs, top1_indices)
+    
+    # 合并搜集所有热词的 match_map 用于表格显示
     global_match_map = {}
-    for word in hotwords:
-        # 使用高级版 scan (传入 engine.sp)
-        res = radar.scan(word, tokenizer=engine.sp, top1_indices=top1_indices)
-        if res["found"]:
-            # 记录哪些帧被识别为什么热词 Token (锚点)
-            for t_idx, token_txt in res["match_map"].items():
-                global_match_map[t_idx] = f"{token_txt}"
+    for item in detected:
+        for tk in item["tokens"]:
+            # 计算帧索引
+            t_idx = int(round(tk["time"] / 0.060))
+            global_match_map[t_idx] = tk["token"].replace("\u2581", "")
 
     # 4. 打印四列调试表格
     print("\n" + "="*160)
