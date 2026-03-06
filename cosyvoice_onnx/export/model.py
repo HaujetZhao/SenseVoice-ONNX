@@ -257,18 +257,8 @@ class MultiHeadedAttentionSANM(nn.Module):
 
 
 class LayerNorm(nn.LayerNorm):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def forward(self, input):
-        output = F.layer_norm(
-            input.float(),
-            self.normalized_shape,
-            self.weight.float() if self.weight is not None else None,
-            self.bias.float() if self.bias is not None else None,
-            self.eps,
-        )
-        return output.type_as(input)
+        return F.layer_norm(input, self.normalized_shape, self.weight, self.bias, self.eps)
 
 
 def sequence_mask(lengths, maxlen=None, dtype=torch.float32, device=None):
@@ -398,6 +388,9 @@ class EncoderLayerSANM(nn.Module):
 
         if not self.normalize_before:
             x = self.norm2(x)
+
+        # 钳制最大范围以挽救由于层级过深和 FP16 引发的溢出灾难
+        x = torch.clamp(x, min=-65500.0, max=65500.0)
 
         return x, mask, cache, mask_shfit_chunk, mask_att_chunk_encoder
 
@@ -587,6 +580,8 @@ class SenseVoiceEncoderSmall(nn.Module):
             encoder_outs = encoder_layer(xs_pad, masks)
             xs_pad, masks = encoder_outs[0], encoder_outs[1]
 
+        # Final Clamp
+        xs_pad = torch.clamp(xs_pad, min=-65500.0, max=65500.0)
         xs_pad = self.tp_norm(xs_pad)
         xs_pad = xs_pad * _masks_sw
         return xs_pad
