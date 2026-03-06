@@ -4,7 +4,7 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceEncoder:
-    def __init__(self, encoder_path: str, inference_config_path: str, prompt_embed_path: str, device="cpu"):
+    def __init__(self, encoder_path: str, inference_config_path: str, prompt_embed_path: str, device="cpu", pad_to: int = 30):
         # 1. 资源路径
         encoder_path = Path(encoder_path)
         inference_config_path = Path(inference_config_path)
@@ -31,8 +31,29 @@ class SenseVoiceEncoder:
         print(f"[Encoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
         self.session = ort.InferenceSession(str(encoder_path), providers=providers, sess_options=session_opts)
         
-        # 4. 其它设置
+        # 4. 精度适配 (检测模型是 FP32 还是 FP16)
+        in_type = self.session.get_inputs()[0].type
+        self.input_dtype = np.float16 if 'float16' in in_type else np.float32
+        print(f"[Encoder] 自动检测输入精度: {self.input_dtype}")
+
+        # 5. DML 策略设置 (仅在 DML 模式下生效)
         self.use_dml = (device.lower() == "dml")
+        self.fixed_len = int(pad_to * 17) # 1s ≈ 17帧 LFR
+        if self.use_dml:
+            self.warmup()
+
+    def warmup(self):
+        """执行一次全量形状推理，触发 DML 算子特化"""
+        dummy_lfr = np.random.randn(1, self.fixed_len, 560).astype(self.input_dtype)
+        dummy_mask = np.ones((1, self.fixed_len), dtype=self.input_dtype)
+        dummy_prompt = np.zeros((1, 4, 560), dtype=self.input_dtype)
+        print(f"[Encoder] DML 推理模式：正在使用形状为 {dummy_lfr.shape} 的 {self.fixed_len//17}s 随机数据进行预热...")
+        self.session.run(None, {
+            "speech_feat": dummy_lfr,
+            "mask": dummy_mask,
+            "prompt_feat": dummy_prompt
+        })
+        print("[Encoder] DML 预热完成。")
 
     def construct_prompt(self, lid="auto", itn=True):
         """构造 4 帧 Prompt Embedding"""
@@ -49,7 +70,7 @@ class SenseVoiceEncoder:
         style_vec = self.prompt_embed[itn_idx:itn_idx+1]
         
         prompt = np.concatenate([lid_vec, event_emo_vec, style_vec], axis=0)
-        return prompt[np.newaxis, ...].astype(np.float32)
+        return prompt[np.newaxis, ...].astype(self.input_dtype)
 
     def forward(self, lfr_feat, lid="zh", itn=True):
         """
@@ -61,11 +82,37 @@ class SenseVoiceEncoder:
         
         T_valid = lfr_feat.shape[0]
         
-        # 动态轴推理
-        mask = np.ones((1, T_valid), dtype=np.float32)
-        enc_out = self.session.run(None, {
-            "speech_feat": lfr_feat[np.newaxis, ...],
-            "mask": mask,
-            "prompt_feat": prompt_feat
-        })[0]
-        return enc_out
+        if self.use_dml and T_valid < self.fixed_len:
+            # DML 填充策略：Uniform Padding + Replicate Padding
+            T_target = self.fixed_len
+            
+            # 构造 Mask (1为有效, 0为填充)
+            mask = np.zeros((1, T_target), dtype=self.input_dtype)
+            mask[0, :T_valid] = 1.0
+            
+            # 构造填充后的特征 (使用最后一帧复读填充)
+            full_feat = np.empty((1, T_target, 560), dtype=self.input_dtype)
+            full_feat[0, :T_valid, :] = lfr_feat.astype(self.input_dtype)
+            full_feat[0, T_valid:, :] = lfr_feat[-1, :].astype(self.input_dtype) # Replicate
+            
+            # 3. 推理
+            print(f"[Encoder] DML 推理：输入形状 {full_feat.shape}, 有效步数 {T_valid}")
+            enc_out = self.session.run(None, {
+                "speech_feat": full_feat,
+                "mask": mask,
+                "prompt_feat": prompt_feat
+            })[0]
+            
+            # 4. 直接返回全量结果 (包括填充部分)
+            # 填充区的输出已被内部掩码清零，保留它们可使 Decoder 形状同样保持稳定
+            return enc_out
+        else:
+            # 动态轴推理 (非 DML 模式或长度已超过固定值)
+            print(f"[Encoder] 推理：输入形状 {(1, T_valid, 560)}")
+            mask = np.ones((1, T_valid), dtype=self.input_dtype)
+            enc_out = self.session.run(None, {
+                "speech_feat": lfr_feat[np.newaxis, ...].astype(self.input_dtype),
+                "mask": mask,
+                "prompt_feat": prompt_feat
+            })[0]
+            return enc_out

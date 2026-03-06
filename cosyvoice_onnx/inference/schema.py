@@ -115,6 +115,7 @@ class ASREngineConfig:
     hotwords: Optional[Any] = None
     top_k: int = 20
     itn: bool = True
+    pad_to: int = 30
 
 
 # ==================== 导出列表 ====================

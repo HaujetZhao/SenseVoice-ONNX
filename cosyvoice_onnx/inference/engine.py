@@ -29,8 +29,8 @@ class SenseVoiceInference:
         model_dir = Path(config.model_dir)
             
         # 1. 内部路径解析 (统一映射逻辑)
-        encoder_path = model_dir / "SenseVoice-Encoder.fp32.onnx"
-        decoder_path = model_dir / "SenseVoice-CTC.fp32.onnx"
+        encoder_path = model_dir / "SenseVoice-Encoder.fp16.onnx"
+        decoder_path = model_dir / "SenseVoice-CTC.fp16.onnx"
         tokenizer_path = model_dir / "tokenizer.bpe.model"
         inference_config_path = model_dir / "inference_config.json"
         prompt_embed_path = model_dir / "prompt_embed.npy"
@@ -40,11 +40,13 @@ class SenseVoiceInference:
             encoder_path=encoder_path, 
             inference_config_path=inference_config_path, 
             prompt_embed_path=prompt_embed_path, 
-            device=self.device
+            device=self.device,
+            pad_to=self.config.pad_to
         )
         self.decoder = SenseVoiceDecoder(
             decoder_path=decoder_path, 
-            device=self.device
+            device=self.device,
+            pad_to=self.config.pad_to
         )
         self.frontend = NumPyMelExtractor()
         
@@ -133,7 +135,8 @@ class SenseVoiceInference:
         
         # 3. 解码器获取搜索空间
         t0 = time.perf_counter()
-        topk_indices, topk_probs, top1_indices, log_probs = self.decoder.get_topk_space(enc_out, top_k=top_k)
+        T_valid = lfr_feat.shape[0]
+        topk_indices, topk_probs, top1_indices, log_probs = self.decoder.get_topk_space(enc_out, top_k=top_k, T_valid=T_valid)
         t_decoder = time.perf_counter() - t0
         
         # 4. 运行并行扫描 (Numba)
@@ -142,7 +145,7 @@ class SenseVoiceInference:
         t_radar = time.perf_counter() - t0
         
         # 5. 准备基础 Greedy 序列
-        greedy_results = greedy_search(log_probs, self.sp, prompt_len=4)
+        greedy_results = greedy_search(log_probs[:, :T_valid+4, :], self.sp, prompt_len=4)
         
         # 6. 调用整合器进行碰撞检测与 Token 块合成
         t0 = time.perf_counter()

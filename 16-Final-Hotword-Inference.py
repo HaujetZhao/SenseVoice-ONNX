@@ -8,7 +8,8 @@ def main():
     config = ASREngineConfig(
         model_dir="./model",
         device="dml",
-        hotwords=["Fun-ASR-Nano", "事情"]
+        hotwords=["Fun-ASR-Nano", "事情"],
+        pad_to=30
     )
     engine = SenseVoiceInference(config)
     
