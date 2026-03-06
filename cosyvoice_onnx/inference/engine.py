@@ -129,9 +129,9 @@ class SenseVoiceInference:
     def _recognize_chunk(self, audio_data: np.ndarray, lid="zh", itn=True, offset_sec=0.0):
         """对单个音频片段进行识别"""
         lfr_feat = self.frontend.extract(audio_data)
-        return self._recognize_lfr(lfr_feat, lid=lid, itn=itn, offset_sec=offset_sec)
+        return self._recognize_lfr(lfr_feat, lid=lid, itn=itn, offset_sec=offset_sec, top_k = self.config.top_k)
 
-    def _recognize_lfr(self, lfr_feat: np.ndarray, lid="zh", itn=True, offset_sec=0.0, top_k=20):
+    def _recognize_lfr(self, lfr_feat: np.ndarray, lid="zh", itn=True, offset_sec=0.0, top_k=10):
         """
         [最底层的识别逻辑] 
         接受 LFR 特征，输出带有全局时间偏移的结果。
