@@ -9,13 +9,9 @@ def main():
     engine = SenseVoiceInference("./model", device="cpu")
     audio, _ = librosa.load(r"d:\cosyvoice\test-fun.mp3", sr=16000)
     
-    # 获取推理后的 Top-K 数据
-    # 我们扩展一下 ctc.py，让 topk_search 能直接返回原始 NumPy 数组
-    from cosyvoice_onnx.inference.ctc import topk_search
+    # 3. 准备搜索空间 (Top-K 概率和索引)
     lfr_feat = engine.frontend.extract(audio)
-    prompt_feat = engine.construct_prompt(lid="zh")
-    mask = np.ones((1, lfr_feat.shape[0])).astype(np.float32)
-    enc_out = engine.enc_sess.run(None, {"speech_feat": lfr_feat[np.newaxis, ...], "mask": mask, "prompt_feat": prompt_feat})[0]
+    enc_out = engine.encoder.forward(lfr_feat, lid="zh")
     log_probs = engine.ctc_sess.run(None, {"enc_out": enc_out})[0]
     
     # 准备 Numba 需要的输入
