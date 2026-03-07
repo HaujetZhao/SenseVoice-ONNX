@@ -20,7 +20,7 @@ def main():
         shutil.copy2(tokens_src, tokens_dst)
     
     bpe_src = os.path.join(MODEL_DIR, "chn_jpn_yue_eng_ko_spectok.bpe.model")
-    bpe_dst = os.path.join(EXPORT_DIR, "tokenizer.bpe.model")
+    bpe_dst = os.path.join(EXPORT_DIR, "Tokenizer.bpe.model")
     if os.path.exists(bpe_src):
         print(f"正在拷贝 BPE 模型: {bpe_dst}")
         shutil.copy2(bpe_src, bpe_dst)
@@ -35,7 +35,7 @@ def main():
     # 获取 Embedding 层权重 (torch.Tensor)
     embed_weight = official_model_wrapper.model.embed.weight.detach().cpu().numpy()
     
-    embed_path = os.path.join(EXPORT_DIR, "prompt_embed.npy")
+    embed_path = os.path.join(EXPORT_DIR, "Prompt-Embd.npy")
     print(f"正在保存 Embedding 矩阵 (形状: {embed_weight.shape}) 到: {embed_path}")
     np.save(embed_path, embed_weight)
 
@@ -49,7 +49,7 @@ def main():
         "input_size": 560,
         "output_size": 512
     }
-    meta_path = os.path.join(EXPORT_DIR, "inference_config.json")
+    meta_path = os.path.join(EXPORT_DIR, "Inference-Config.json")
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=4, ensure_ascii=False)
     print(f"基础配置信息已保存到: {meta_path}")
