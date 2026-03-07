@@ -29,7 +29,7 @@ class SenseVoiceDecoder:
         # 4. DML 预热
         self.use_dml = (device.lower() == "dml")
         self.fixed_len = int(pad_to * 17) + 4 # 1s ≈ 17帧 + 4帧 Prompt
-        if self.use_dml:
+        if self.use_dml and isinstance(pad_to, int) and pad_to > 0:
             self.warmup()
 
     def warmup(self):

@@ -39,7 +39,7 @@ class SenseVoiceEncoder:
         # 5. DML 策略设置 (仅在 DML 模式下生效)
         self.use_dml = (device.lower() == "dml")
         self.fixed_len = int(pad_to * 17) # 1s ≈ 17帧 LFR
-        if self.use_dml:
+        if self.use_dml and isinstance(pad_to, int) and pad_to > 0:
             self.warmup()
 
     def warmup(self):
