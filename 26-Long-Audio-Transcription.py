@@ -9,8 +9,9 @@ def main():
     # 长音频转录建议使用 CPU，或者 DML (不设置 pad_to 或设置较大的 pad_to)
     config = ASREngineConfig(
         model_dir="./model",
-        device="dml", # 长音频文件转录，CPU 通常更稳定且显存压力小
-        hotwords='hot.txt'
+        device="dml", 
+        hotwords='hot.txt', 
+        precision='int4'
     )
     engine = SenseVoiceInference(config)
     
@@ -20,9 +21,9 @@ def main():
         print(f"❌ 找不到测试音频: {audio_path}")
         return
         
-    print(f"\n[SenseVoice] 正在加载音频 (前 300 秒): {os.path.basename(audio_path)}")
+    print(f"\n[SenseVoice] 正在加载音频: {os.path.basename(audio_path)}")
     t0 = time.perf_counter()
-    audio = load_audio(audio_path, duration=300)
+    audio = load_audio(audio_path, duration=None)
     print(f"[SenseVoice] 音频加载完成，耗时: {time.perf_counter()-t0:.2f}s")
     
     # 3. 运行长音频识别
@@ -39,12 +40,12 @@ def main():
     
     # 4. 导出结果
     print(f"\n[SenseVoice] 正在导出结果...")
-    export_to_srt("result.srt", result)
-    export_to_txt("result.txt", result)
+    export_to_srt("睡前消息.srt", result)
+    export_to_txt("睡前消息.txt", result)
     
-    print("\n[Preview] 前 100 个字符:")
+    print("\n[Preview] 前 200 个字符:")
     print("-" * 40)
-    print(result.text[:100] + "...")
+    print(result.text[:200] + "...")
     print("-" * 40)
 
 if __name__ == "__main__":

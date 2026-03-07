@@ -9,7 +9,9 @@ def main():
         model_dir="./model",
         device="dml",
         hotwords='hot.txt',
-        pad_to=20
+        pad_to=20, 
+        precision='int4', 
+        top_k=5
     )
     engine = SenseVoiceInference(config)
     
