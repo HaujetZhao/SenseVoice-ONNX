@@ -1,0 +1,8 @@
+onnxruntime-directml
+numpy
+sentencepiece
+soundfile
+torch
+modelscope
+funasr
+

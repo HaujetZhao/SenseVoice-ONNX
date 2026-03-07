@@ -28,9 +28,9 @@ def main():
     audio = load_audio(audio_path)
     
     # 3. 运行推理 (连续三遍测试速度)
-    print(f"\n[Performance] 开始三连测测试 (此时 Radar 已持有 {len(config.hotwords)} 个热词)...")
+    print(f"\n[Performance] 开始测速...")
     
-    for i in range(1, 6):
+    for i in range(1, 4):
         # 此时引擎内部已持有 radar，不会重复构建索引
         res_obj = engine.recognize(audio, lid="auto")
         tm = res_obj.timings
@@ -39,16 +39,16 @@ def main():
         print(f"     [细节] Frontend: {tm.frontend*1000:4.1f}ms | Encoder: {tm.encoder*1000:4.1f}ms | Decoder: {tm.decoder*1000:4.1f}ms | Radar: {tm.radar*1000:4.1f}ms")
 
     # 4. 展示最后一次的详细结果
-    print("\n" + "="*80)
+    print("\n" + "="*50)
     print(f"{'时间戳':>10} | {'字符':<10} | {'类型'}")
-    print("-" * 80)
+    print("-" * 50)
     for r in res_obj.results:
         char_type = "🔥 HOTWORD" if r.is_hotword else "  Greedy"
         print(f"  {r.start:5.2f}s | {r.text:<10} | {char_type}")
-    print("-" * 80)
+    print("-" * 50)
     print("【最终识别文本】")
     print(res_obj.text)
-    print("="*80)
+    print("="*50)
 
 if __name__ == "__main__":
     main()
