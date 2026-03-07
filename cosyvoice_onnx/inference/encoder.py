@@ -96,7 +96,6 @@ class SenseVoiceEncoder:
             full_feat[0, T_valid:, :] = lfr_feat[-1, :].astype(self.input_dtype) # Replicate
             
             # 3. 推理
-            print(f"[Encoder] DML 推理：输入形状 {full_feat.shape}, 有效步数 {T_valid}")
             enc_out = self.session.run(None, {
                 "speech_feat": full_feat,
                 "mask": mask,
@@ -108,7 +107,6 @@ class SenseVoiceEncoder:
             return enc_out
         else:
             # 动态轴推理 (非 DML 模式或长度已超过固定值)
-            print(f"[Encoder] 推理：输入形状 {(1, T_valid, 560)}")
             mask = np.ones((1, T_valid), dtype=self.input_dtype)
             enc_out = self.session.run(None, {
                 "speech_feat": lfr_feat[np.newaxis, ...].astype(self.input_dtype),

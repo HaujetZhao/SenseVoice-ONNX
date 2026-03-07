@@ -9,7 +9,6 @@ from .audio import NumPyMelExtractor, load_audio
 from .encoder import SenseVoiceEncoder
 from .decoder import SenseVoiceDecoder
 from .integrator import ResultIntegrator
-from .ctc import greedy_search, topk_search
 from .radar import HotwordRadar
 from .schema import ASREngineConfig, TranscriptionResult, Timings, RecognitionResult
 

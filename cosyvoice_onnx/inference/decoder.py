@@ -1,7 +1,6 @@
 from pathlib import Path
 import numpy as np
 import onnxruntime as ort
-from .ctc import greedy_search, topk_search
 
 class SenseVoiceDecoder:
     def __init__(self, decoder_path: str, device="cpu", pad_to: int = 30):
@@ -47,7 +46,6 @@ class SenseVoiceDecoder:
         if enc_out.dtype != self.input_dtype:
             enc_out = enc_out.astype(self.input_dtype)
             
-        print(f"[Decoder] DML 推理：输入形状 {enc_out.shape}")
         # 模型一次性返回 Top-100 的概率和索引
         topk_log_probs, topk_indices = self.session.run(None, {"enc_out": enc_out})
         return topk_log_probs, topk_indices
