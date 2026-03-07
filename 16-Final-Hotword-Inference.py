@@ -32,7 +32,7 @@ def main():
     
     for i in range(1, 6):
         # 此时引擎内部已持有 radar，不会重复构建索引
-        res_obj = engine.recognize(audio, lid="zh")
+        res_obj = engine.recognize(audio, lid="auto")
         tm = res_obj.timings
         
         print(f" >>> 第 {i} 轮耗时: {tm.total*1000:7.2f}ms | 识别文本: {res_obj.text}")
