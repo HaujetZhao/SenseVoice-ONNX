@@ -87,19 +87,15 @@ class SenseVoiceInference:
         from .radar import HotwordRadar
         self.radar = HotwordRadar(final_list, self.sp)
 
-    def __call__(self, audio_data: np.ndarray, lid="zh", itn=True, chunk_size=30, overlap=5):
+    def __call__(self, audio_data: np.ndarray, lid="auto", itn=True, chunk_size=40, overlap=5):
         """[默认识别接口] 根据音频长度自动选择分段或直接识别"""
         return self.recognize(audio_data, lid=lid, itn=itn, chunk_size=chunk_size, overlap=overlap)
 
-    def recognize(self, audio_data: np.ndarray, lid="zh", itn=True, chunk_size=30, overlap=5):
+    def recognize(self, audio_data: np.ndarray, lid="auto", itn=True, chunk_size=40, overlap=5):
         """
-        长音频识别接口，支持自动分段拼接。
+        识别接口，支持自动分段拼接。
+        - 采用统一的分片处理逻辑：短音频即为“只有一片”的长音频。
         """
-        duration = len(audio_data) / 16000
-        # 如果音频长度小于等于 chunk_size，直接识别
-        if duration <= chunk_size:
-            return self._recognize_chunk(audio_data, lid=lid, itn=itn)
-            
         # 1. 提取全量特征
         lfr_feat = self.frontend.extract(audio_data)
         
@@ -107,15 +103,16 @@ class SenseVoiceInference:
         # 1s ≈ 16.6 帧, 这里使用更精确的 1s = 100/6 帧
         chunk_frames = int(chunk_size * 100 / 6)
         overlap_frames = int(overlap * 100 / 6)
-        stride = chunk_frames - overlap_frames
+        stride = max(1, chunk_frames - overlap_frames)
         
         all_results = []
         for start in range(0, len(lfr_feat), stride):
             end = min(start + chunk_frames, len(lfr_feat))
             chunk_lfr = lfr_feat[start:end]
-            # 执行单段识别
+            
+            # 执行单段识别 (从 config 同步 Top-K)
             offset_sec = (start * 6 * 0.01) # 1帧 = 0.06s
-            res = self._recognize_lfr(chunk_lfr, lid=lid, itn=itn, offset_sec=offset_sec)
+            res = self._recognize_lfr(chunk_lfr, lid=lid, itn=itn, offset_sec=offset_sec, top_k=self.config.top_k)
             all_results.append(res)
             
             # 如果已经到达末尾，跳出
@@ -123,14 +120,16 @@ class SenseVoiceInference:
                 break
                 
         # 3. 结果流式拼接 (基于 SequenceMatcher)
+        # 如果只有一片结果，_merge_results 会直接返回原对象，保留完整耗时统计。
         return self._merge_results(all_results, overlap)
 
-    def _recognize_chunk(self, audio_data: np.ndarray, lid="zh", itn=True, offset_sec=0.0):
-        """对单个音频片段进行识别"""
-        lfr_feat = self.frontend.extract(audio_data)
-        return self._recognize_lfr(lfr_feat, lid=lid, itn=itn, offset_sec=offset_sec, top_k = self.config.top_k)
+    def transcribe(self, audio_file: str, lid="auto", itn=True, chunk_size=40, overlap=5, start_second=None, duration=None):
+        """运行完整转录流水线 (从文件加载音频)"""
+        audio = load_audio(audio_file, start_second=start_second, duration=duration)
+        return self.recognize(audio, lid=lid, itn=itn, chunk_size=chunk_size, overlap=overlap)
 
-    def _recognize_lfr(self, lfr_feat: np.ndarray, lid="zh", itn=True, offset_sec=0.0, top_k=10):
+
+    def _recognize_lfr(self, lfr_feat: np.ndarray, lid="auto", itn=True, offset_sec=0.0, top_k=10):
         """
         [最底层的识别逻辑] 
         接受 LFR 特征，输出带有全局时间偏移的结果。
