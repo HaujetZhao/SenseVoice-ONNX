@@ -10,22 +10,40 @@ class HotwordRadar:
         self.tokenizer = tokenizer
         self.hotwords = hotwords
         
-        # 预处理搜索词：去除标点并分词
+        # 1. 预计算全量词表的小写映射 (加速 case-insensitive 匹配)
+        # 注意: SentencePiece 可能包含特有的下划线 \u2581
+        self.vocab_lower = []
+        for i in range(tokenizer.get_piece_size()):
+            piece = tokenizer.id_to_piece(i)
+            # 我们将 piece 统一转小写，并去掉 SP 标记进行判定
+            self.vocab_lower.append(piece.lower().replace('\u2581', ''))
+        
+        # 2. 预处理搜索词
         self.search_hotwords = [re.sub(r'[^\w\s]+', ' ', w) for w in hotwords]
         
-        # 构建前缀索引: {首字_TokenID: [(word_idx, [全量TokenID序列]), ...]}
+        # 3. 构建前缀索引: {首字小写Piece: [(word_idx, [全量小写Piece序列]), ...]}
         self.prefix_index = {}
+        self.hotword_lower_sequences = [] # 存储每个热词对应的小写 Piece 序列
+        
         for idx, sw in enumerate(self.search_hotwords):
             token_ids = tokenizer.encode(sw)
-            if not token_ids: continue
+            if not token_ids: 
+                self.hotword_lower_sequences.append([])
+                continue
             
-            first_tid = token_ids[0]
-            if first_tid not in self.prefix_index:
-                self.prefix_index[first_tid] = []
-            self.prefix_index[first_tid].append((idx, token_ids))
+            # 将该热词的所有 Token ID 预先转为小写 Piece 序列
+            lower_pieces = [self.vocab_lower[tid] for tid in token_ids]
+            self.hotword_lower_sequences.append(lower_pieces)
+            
+            first_p = lower_pieces[0]
+            if not first_p: continue # 过滤空 piece
+            
+            if first_p not in self.prefix_index:
+                self.prefix_index[first_p] = []
+            self.prefix_index[first_p].append(idx)
             
         # 保存分段后的字符串形式用于回显
-        self.hotword_tokens = [tokenizer.encode_as_pieces(sw) for sw in self.search_hotwords]
+        self.hotword_pieces = [tokenizer.encode_as_pieces(sw) for sw in self.search_hotwords]
 
     def scan(self, topk_ids, topk_probs, top1_indices, blank_id=0, max_lookahead=15, max_gap=1):
         """
@@ -40,23 +58,32 @@ class HotwordRadar:
             if top1_indices[t] == blank_id:
                 continue
             
-            # 检查当前帧 Top-K 中是否有热词首字
+            # 预提取该帧所有 Top-K 的小写 Piece
+            frame_lower_pieces = [self.vocab_lower[tid] for tid in topk_ids[t]]
+            
+            # 检查当前帧 Top-K 中是否有能触发热词的首字 (小写匹配)
             best_match_in_frame = None
             
+            # 记录已经检查过的小写 Piece，避免在一帧内重复扫描
+            seen_pieces = set()
+            
             for k in range(K):
-                tid = topk_ids[t, k]
-                if tid not in self.prefix_index:
+                lp = frame_lower_pieces[k]
+                if not lp or lp in seen_pieces: continue
+                seen_pieces.add(lp)
+                
+                if lp not in self.prefix_index:
                     continue
                 
-                # 尝试匹配所有以此 Token 开头的热词
-                for word_idx, token_ids in self.prefix_index[tid]:
+                # 尝试匹配所有以此 Piece 开头的热词
+                for word_idx in self.prefix_index[lp]:
+                    lower_token_seq = self.hotword_lower_sequences[word_idx]
                     match_data = self._try_match(
-                        t, k, token_ids, topk_ids, topk_probs, top1_indices, 
+                        t, k, lower_token_seq, topk_ids, topk_probs, top1_indices, 
                         blank_id, max_lookahead, max_gap
                     )
                     
                     if match_data:
-                        # 在同一帧触发的多个候选词中，择优录取
                         if not best_match_in_frame or match_data["prob"] > best_match_in_frame["prob"]:
                             best_match_in_frame = {
                                 "word_idx": word_idx,
@@ -72,10 +99,10 @@ class HotwordRadar:
         # 2. 后处理：非重叠合并
         return self._post_process(hits)
 
-    def _try_match(self, t_start, k_start, token_ids, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, max_gap):
-        """内部尝试匹配一个特定词"""
+    def _try_match(self, t_start, k_start, lower_token_seq, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, max_gap):
+        """内部尝试匹配一个特定词 (小写 Piece 匹配)"""
         T = topk_ids.shape[0]
-        word_len = len(token_ids)
+        word_len = len(lower_token_seq)
         match_frames = []
         
         # 首字处理
@@ -85,7 +112,7 @@ class HotwordRadar:
         
         # 后续字跳跃匹配
         for i in range(1, word_len):
-            target_tid = token_ids[i]
+            target_lp = lower_token_seq[i]
             found_t = -1
             best_p = -1.0
             
@@ -93,14 +120,15 @@ class HotwordRadar:
             search_end = min(search_start + max_lookahead, T)
             
             for t in range(search_start, search_end):
-                # 间隙约束：(last_t, t) 之间不能有超过 max_gap 个 Greedy 非空帧
+                # 间隙约束
                 gap_emissions = np.count_nonzero(top1_indices[last_t + 1 : t] != blank_id)
                 if gap_emissions > max_gap:
                     continue
                 
-                # 在此帧的 Top-K 中找目标 Token
+                # 在此帧的 Top-K 中找目标小写 Piece
                 for k in range(topk_ids.shape[1]):
-                    if topk_ids[t, k] == target_tid:
+                    tid = topk_ids[t, k]
+                    if self.vocab_lower[tid] == target_lp:
                         p = topk_probs[t, k]
                         if p > best_p:
                             best_p = p
@@ -133,12 +161,12 @@ class HotwordRadar:
             # 这里的判定条件确保取“第一个发现的名字”，且后续重叠部分不重复报
             if h["start_frame"] > last_covered_until:
                 idx = h["word_idx"]
-                tokens = self.hotword_tokens[idx]
+                pieces = self.hotword_pieces[idx]
                 token_details = []
                 
                 for tk_pos, f_idx in enumerate(h["frame_indices"]):
                     token_details.append({
-                        "token": tokens[tk_pos], 
+                        "token": pieces[tk_pos], 
                         "time": round(f_idx * 0.060, 3)
                     })
                 
