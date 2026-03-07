@@ -63,7 +63,8 @@ def load_audio_numpy(audio_path, sample_rate=16000, start_second=None, duration=
     
     # 获取偏移量
     start_frame = int(start_second * sr) if start_second is not None else 0
-    frames = int(duration * sr) if duration is not None else -1
+    # duration 为 None 或 <= 0 时，读取全部
+    frames = int(duration * sr) if (duration is not None and duration > 0) else -1
     
     audio, sr = sf.read(audio_path, start=start_frame, frames=frames, dtype='float32')
     
@@ -92,7 +93,7 @@ def load_audio_ffmpeg(audio_path, sample_rate=16000, start_second=None, duration
 
     if start_second is not None:
         cmd.extend(['-ss', str(start_second)])
-    if duration is not None:
+    if duration is not None and duration > 0:
         cmd.extend(['-t', str(duration)])
 
     cmd.extend([
