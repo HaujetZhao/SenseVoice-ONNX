@@ -1,9 +1,7 @@
 import os
 import numpy as np
-import librosa
 from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
 from cosyvoice_onnx.inference.radar import HotwordRadar
-from cosyvoice_onnx.inference.ctc import topk_search
 
 def main():
     # 1. 初始化引擎
@@ -11,9 +9,13 @@ def main():
     config = ASREngineConfig(model_dir=model_dir, device="cpu", precision="int4")
     engine = SenseVoiceInference(config)
     
-    # 2. 准备音频和热词
+    # 2. 准备音频
     audio_path = r"d:\cosyvoice\test-fun.mp3"
-    hotwords = ["Fun ASR Nano", "事情", "但是"]
+
+    # 准备热词
+    hotword_file = "hot.txt"
+    with open('hot.txt', "r", encoding="utf-8") as f:
+        hotwords = [line.strip() for line in f if line.strip()]
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")
