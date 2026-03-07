@@ -89,10 +89,12 @@ class TranscriptionResult:
     Attributes:
         text: 最终识别文本
         results: 详细的 RecognitionResult 列表
+        hotwords: 识别到的热词列表
         timings: 耗时统计
     """
     text: str = ""
     results: List[RecognitionResult] = field(default_factory=list)
+    hotwords: List[str] = field(default_factory=list)
     timings: Timings = field(default_factory=Timings)
 
 

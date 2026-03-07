@@ -46,6 +46,7 @@ def main():
         char_type = "🔥 HOTWORD" if r.is_hotword else "  Greedy"
         print(f"  {r.start:5.2f}s | {r.text:<10} | {char_type}")
     print("-" * 50)
+    print(f"【检测到的热词】: {res_obj.hotwords}")
     print("【最终识别文本】")
     print(res_obj.text)
     print("="*50)

@@ -174,6 +174,7 @@ class SenseVoiceInference:
         return TranscriptionResult(
             text="".join([r.text for r in recognition_results]),
             results=recognition_results,
+            hotwords=[h["text"] for h in detected_hotwords],
             timings=Timings(frontend=0, encoder=t_encoder, decoder=t_decoder, radar=t_radar, integrate=t_integrate, total=t_total)
         )
 
@@ -244,8 +245,15 @@ class SenseVoiceInference:
                     new_start_idx = len(new_res)
                 merged_results.extend(new_res[new_start_idx:])
         
+        # 汇聚所有分段中发现的热词并去重
+        all_hotwords = []
+        for r in results_list:
+            all_hotwords.extend(r.hotwords)
+        unique_hotwords = list(dict.fromkeys(all_hotwords)) # 保持插入顺序的去重
+        
         return TranscriptionResult(
             text="".join([r.text for r in merged_results]),
             results=merged_results,
+            hotwords=unique_hotwords,
             timings=Timings(0, 0, 0, 0, 0, 0) # 拼接后的汇总耗时暂时忽略
         )

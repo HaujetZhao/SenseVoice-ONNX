@@ -78,12 +78,12 @@ python 16-Final-Hotword-Inference.py
 [Hotwords] 当前热词列表: hot.txt
 
 [Performance] 开始测速...
- >>> 第 1 轮耗时:   99.40ms | 识别文本: 那我来测试一下Fun-ASR-Nano。
-     [细节] Frontend:  0.0ms | Encoder: 81.8ms | Decoder: 17.2ms | Radar:  0.3ms
- >>> 第 2 轮耗时:   91.97ms | 识别文本: 那我来测试一下Fun-ASR-Nano。
-     [细节] Frontend:  0.0ms | Encoder: 75.4ms | Decoder: 16.0ms | Radar:  0.5ms
- >>> 第 3 轮耗时:   89.95ms | 识别文本: 那我来测试一下Fun-ASR-Nano。
-     [细节] Frontend:  0.0ms | Encoder: 73.6ms | Decoder: 16.0ms | Radar:  0.3ms
+ >>> 第 1 轮耗时:   86.63ms | 识别文本: 那我来测试一下Fun-ASR-Nano。
+     [细节] Frontend:  0.0ms | Encoder: 70.0ms | Decoder: 16.3ms | Radar:  0.3ms
+ >>> 第 2 轮耗时:   84.97ms | 识别文本: 那我来测试一下Fun-ASR-Nano。
+     [细节] Frontend:  0.0ms | Encoder: 70.0ms | Decoder: 14.4ms | Radar:  0.2ms
+ >>> 第 3 轮耗时:   84.76ms | 识别文本: 那我来测试一下Fun-ASR-Nano。
+     [细节] Frontend:  0.0ms | Encoder: 70.0ms | Decoder: 14.5ms | Radar:  0.3ms
 
 ==================================================
        时间戳 | 字符         | 类型
@@ -103,6 +103,7 @@ python 16-Final-Hotword-Inference.py
    3.06s | no         | 🔥 HOTWORD
    3.42s | 。          |   Greedy
 --------------------------------------------------
+【检测到的热词】: ['Fun-ASR-Nano']
 【最终识别文本】
 那我来测试一下Fun-ASR-Nano。
 ==================================================
