@@ -5,51 +5,60 @@ class ResultIntegrator:
     def integrate(greedy_results, detected_hotwords):
         """
         [核心算法] 将 Greedy 识别流与热词匹配流进行无缝融合与替换
+
+        算法分两步：
+          1. 预处理：过滤掉与前一个热词时间重叠的热词（保留最早出现的）
+          2. 双指针合并：遍历 greedy token，热词指针只向前推进，O(N+M)
+
         Args:
-            greedy_results: List[dict] -> [{'text': '...', 'start': ...}, ...]
-            detected_hotwords: List[dict] -> [{'text': '...', 'start': ..., 'tokens': [...]}, ...]
+            greedy_results:    List[dict] -> [{'text': '...', 'start': ...}, ...]
+            detected_hotwords: List[dict] -> [{'text': '...', 'start': ..., 'end': ..., 'tokens': [...]}, ...]
         Returns:
             final_results: List[dict]
         """
-        # 1. 按照时间顺序排列所有检测到的热词
+        # --- 步骤 1：过滤重叠热词，保留时间最早的那个 ---
+        # 两个热词重叠的判定：后一个的 start < 前一个的 end
         detected_hotwords.sort(key=lambda x: x["start"])
-        
+        active_hotwords = []
+        last_end = -1.0
+        for hw in detected_hotwords:
+            if hw["start"] >= last_end - 0.02:   # 不重叠，保留
+                active_hotwords.append(hw)
+                last_end = hw["end"]
+            # 否则与前一个重叠，丢弃
+
+        # --- 步骤 2：双指针合并 ---
         final_results = []
-        last_hotword_end = -1.0
-        results_set = set() # 记录已处理的热词原始文本，防止同一热词在重叠区域被多次插入
-        
+        hw_idx = 0          # 指向当前"候选热词"
+        emitted = set()     # 记录已输出的热词索引（按位置去重，防止一个热词被输出多次）
+
         for g in greedy_results:
-            replaced = False
-            for hw in detected_hotwords:
-                # 判定当前 Greedy 符号是否落在热词的“领土”内
-                # 0.02s 的冗余是为了处理浮点数微小偏移和 CTC 的发散性
-                if g["start"] >= hw["start"] - 0.02 and g["start"] <= hw["end"] + 0.02:
-                    if hw["text"] not in results_set:
-                        # 执行 Token 块级别插入
-                        integrated_chunks = ResultIntegrator._merge_tokens_to_chunks(hw)
-                        final_results.extend(integrated_chunks)
-                        
-                        results_set.add(hw["text"])
-                        last_hotword_end = hw["end"]
-                    replaced = True
-                    break
-            
-            # 如果没被替换，且不在热词的封锁区内，则作为普通文本加入
-            if not replaced and g["start"] > last_hotword_end:
-                # 冗余压制逻辑：如果刚才刚结束一个热词，且现在的字跟热词里的字长得一样
-                # 可能是由于对齐误差导致的重复，我们进行简单的静默跳过
-                if last_hotword_end > 0 and (g["start"] - last_hotword_end < 0.5):
-                    # 查找上一个落点的热词文本
-                    last_hw = [h["text"] for h in detected_hotwords if abs(h["end"] - last_hotword_end) < 0.01]
-                    if last_hw and g["text"] in last_hw[0]:
-                        continue
-                        
+            g_start = g["start"]
+
+            # 推进热词指针：跳过已完全结束的热词
+            while hw_idx < len(active_hotwords) and active_hotwords[hw_idx]["end"] + 0.02 < g_start:
+                hw_idx += 1
+
+            # 判断当前 greedy token 是否落在热词区间内
+            in_hotword_span = False
+            if hw_idx < len(active_hotwords):
+                hw = active_hotwords[hw_idx]
+                # 0.02s 冗余处理浮点偏移和 CTC 发散
+                if hw["start"] - 0.02 <= g_start <= hw["end"] + 0.02:
+                    in_hotword_span = True
+                    if hw_idx not in emitted:
+                        # 首次进入该热词区间：输出热词块
+                        final_results.extend(ResultIntegrator._merge_tokens_to_chunks(hw))
+                        emitted.add(hw_idx)
+                    # 无论是否首次，当前 greedy token 都跳过（已被热词覆盖）
+
+            if not in_hotword_span:
                 final_results.append({
                     "text": g["text"],
-                    "start": g["start"],
+                    "start": g_start,
                     "is_hotword": False
                 })
-                
+
         return final_results
 
     @staticmethod
