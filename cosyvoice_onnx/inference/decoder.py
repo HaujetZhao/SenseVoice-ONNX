@@ -3,30 +3,43 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceDecoder:
-    def __init__(self, decoder_path: str, device="cpu", pad_to: int = 30):
+    def __init__(self, decoder_path: str, onnx_provider="cpu", pad_to: int = 30):
         # 1. 资源路径
+        self.model_path = decoder_path
         decoder_path = Path(decoder_path)
         
+        self.onnx_provider = onnx_provider.upper()
+
         # 2. 初始化会话
+        available_providers = ort.get_available_providers()
         providers = ['CPUExecutionProvider']
-        if device.lower() == "dml":
-            providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+        
+        if self.onnx_provider in ('TRT', 'TENSORRT') and 'TensorrtExecutionProvider' in available_providers:
+            providers.insert(0, ('TensorrtExecutionProvider', {
+                'trt_fp16_enable': True,
+                'trt_engine_cache_enable': True,
+                'trt_engine_cache_path': Path(self.model_path).parent / 'trt_cache',
+            }))
+        elif self.onnx_provider == 'DML' and 'DmlExecutionProvider' in available_providers:
+            providers.insert(0, 'DmlExecutionProvider')
+        elif self.onnx_provider == 'CUDA' and 'CUDAExecutionProvider' in available_providers:
+            providers.insert(0, 'CUDAExecutionProvider')
         
         session_opts = ort.SessionOptions()
         session_opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         session_opts.add_session_config_entry("session.inter_op.allow_spinning", "0")
         session_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         
-        print(f"[Decoder] 正在初始化 ONNX 会话 (EP: {providers[0]})...")
+        print(f"[Decoder] 正在初始化 ONNX 会话 (Provider: {self.onnx_provider})...")
         self.session = ort.InferenceSession(str(decoder_path), providers=providers, sess_options=session_opts)
 
         # 3. 精度适配
         in_type = self.session.get_inputs()[0].type
         self.input_dtype = np.float16 if 'float16' in in_type else np.float32
-        print(f"[Decoder] 自动检测输入精度: {self.input_dtype}")
+        print(f"[Decoder] 精度检测成功: {self.input_dtype}")
 
         # 4. DML 预热
-        self.use_dml = (device.lower() == "dml")
+        self.use_dml = (self.onnx_provider == "DML")
         self.fixed_len = int(pad_to * 17) + 4 # 1s ≈ 17帧 + 4帧 Prompt
         if self.use_dml and isinstance(pad_to, int) and pad_to > 0:
             self.warmup()

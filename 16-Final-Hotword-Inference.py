@@ -7,16 +7,17 @@ def main():
     # 1. 初始化引擎 (使用 ASREngineConfig)
     config = ASREngineConfig(
         model_dir="./model",
-        device="dml",
+        onnx_provider="dml",
         hotwords='hot.txt',
-        pad_to=20, 
+        pad_to=30, 
         precision='int4', 
         top_k=5
     )
     engine = SenseVoiceInference(config)
     
     # 2. 准备音频
-    audio_path = r"d:\cosyvoice\test-fun.mp3"
+    audio_path = r"test-fun.mp3"
+    audio_path = r"dugong.mp3"
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")

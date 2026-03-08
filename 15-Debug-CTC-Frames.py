@@ -6,11 +6,13 @@ from cosyvoice_onnx.inference.radar import HotwordRadar
 def main():
     # 1. 初始化引擎
     model_dir = "./model"
-    config = ASREngineConfig(model_dir=model_dir, device="cpu", precision="int4")
+    config = ASREngineConfig(model_dir=model_dir, onnx_provider="cpu", precision="int4")
     engine = SenseVoiceInference(config)
     
     # 2. 准备音频
-    audio_path = r"d:\cosyvoice\test-fun.mp3"
+    audio_path = r"test-fun.mp3"
+    audio_path = r"睡前消息.m4a"
+    audio_path = r"dugong.mp3"
 
     # 准备热词
     hotword_file = "hot.txt"
@@ -21,7 +23,7 @@ def main():
         print(f"❌ 找不到测试音频: {audio_path}")
         return
         
-    audio = load_audio(audio_path)
+    audio = load_audio(audio_path, duration = 30)
     
     # 3. 运行推理并获取调试数据
     # 提取特征
@@ -29,7 +31,7 @@ def main():
     T_valid = lfr_feat.shape[0]
     
     # 配置显示参数
-    display_top_k = 8 # <--- 变量定义：设置想要显示的搜索深度以及雷达扫描深度
+    display_top_k = 20 # <--- 变量定义：设置想要显示的搜索深度以及雷达扫描深度
     
     # Encoder
     enc_out = engine.encoder.forward(lfr_feat, lid="zh")

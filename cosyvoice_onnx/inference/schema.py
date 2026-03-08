@@ -107,13 +107,13 @@ class ASREngineConfig:
 
     Attributes:
         model_dir: 模型目录路径
-        device: 推理设备 (cpu, dml)
+        onnx_provider: 推理后端 (CPU, CUDA, DML, TensorRT)
         hotwords: 初始热词列表、路径或多行文本
         top_k: 热词搜索 Top-K 深度
         itn: 是否启用反向文本规范化
     """
     model_dir: str
-    device: str = "cpu"
+    onnx_provider: str = "cpu"
     hotwords: Optional[Any] = None
     top_k: int = 10
     itn: bool = True

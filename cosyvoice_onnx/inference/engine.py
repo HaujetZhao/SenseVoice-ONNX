@@ -25,7 +25,7 @@ class SenseVoiceInference:
         只接受 ASREngineConfig 实例，所有参数均封装在其中。
         """
         self.config = config
-        self.device = config.device
+        self.onnx_provider = config.onnx_provider
         model_dir = Path(config.model_dir)
             
         # 1. 内部路径解析 (统一映射逻辑)
@@ -34,18 +34,18 @@ class SenseVoiceInference:
         tokenizer_path = model_dir / "Tokenizer.bpe.model"
         inference_config_path = model_dir / "Inference-Config.json"
         prompt_embed_path = model_dir / "Prompt-Embd.npy"
-
+ 
         # 2. 构造编码器、解码器与前端
         self.encoder = SenseVoiceEncoder(
             encoder_path=encoder_path, 
             inference_config_path=inference_config_path, 
             prompt_embed_path=prompt_embed_path, 
-            device=self.device,
+            onnx_provider=self.onnx_provider,
             pad_to=self.config.pad_to
         )
         self.decoder = SenseVoiceDecoder(
             decoder_path=decoder_path, 
-            device=self.device,
+            onnx_provider=self.onnx_provider,
             pad_to=self.config.pad_to
         )
         self.frontend = NumPyMelExtractor()
