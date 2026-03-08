@@ -16,7 +16,7 @@ class HotwordRadar:
         for i in range(tokenizer.get_piece_size()):
             piece = tokenizer.id_to_piece(i)
             # 我们将 piece 统一转小写，并去掉 SP 标记进行判定
-            self.vocab_lower.append(piece.lower().replace('\u2581', ''))
+            self.vocab_lower.append(piece.lower().replace('\u2581', '').strip())
         
         # 2. 预处理搜索词
         self.search_hotwords = [re.sub(r'[^\w\s]+', ' ', w) for w in hotwords]
