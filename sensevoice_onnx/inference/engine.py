@@ -31,7 +31,7 @@ class SenseVoiceInference:
         # 1. 内部路径解析 (统一映射逻辑)
         encoder_path = model_dir / f"SenseVoice-Encoder.{config.precision}.onnx"
         decoder_path = model_dir / f"SenseVoice-CTC.{config.precision}.onnx"
-        tokenizer_path = model_dir / "Tokenizer.bpe.model"
+        tokenizer_path = model_dir / "tokenizer.bpe.model"
         inference_config_path = model_dir / "Inference-Config.json"
         prompt_embed_path = model_dir / "Prompt-Embd.npy"
  
@@ -50,9 +50,10 @@ class SenseVoiceInference:
         )
         self.frontend = NumPyMelExtractor()
         
-        # 3. 初始化分词器
+        # 3. 初始化分词器 (使用 bytes 加载，避免 Windows 路径编码问题)
         self.sp = spm.SentencePieceProcessor()
-        self.sp.load(str(tokenizer_path))
+        with open(tokenizer_path, 'rb') as f:
+            self.sp.load_from_serialized_proto(f.read())
         
         # 4. 初始化热词雷达 (从配置中获取)
         self.radar = None
