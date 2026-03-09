@@ -7,7 +7,7 @@ from pathlib import Path
 from export_config import MODEL_DIR, EXPORT_DIR
 
 # 引入 Wrapper
-from cosyvoice_onnx.export.wrappers import CTCExportWrapper
+from sensevoice_onnx.export.wrappers import CTCExportWrapper
 from funasr import AutoModel
 
 def main():

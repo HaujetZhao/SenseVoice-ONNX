@@ -1,7 +1,7 @@
 import os
 import numpy as np
-from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
-from cosyvoice_onnx.inference.radar import HotwordRadar
+from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
+from sensevoice_onnx.inference.radar import HotwordRadar
 
 def main():
     # 1. 初始化引擎

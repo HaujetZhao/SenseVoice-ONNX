@@ -1,7 +1,7 @@
 import os
 import time
 import numpy as np
-from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
+from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
 
 def main():
     # 1. 初始化引擎 (使用 ASREngineConfig)

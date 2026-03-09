@@ -8,8 +8,8 @@ from export_config import MODEL_DIR, EXPORT_DIR
 
 # 引入改造后的模型定义和 Wrapper
 # 由于 model_definition 需要加载官方权重，我们先用 funasr 加载官方权重，再将其 state_dict 注入到我们的导出版本
-from cosyvoice_onnx.export.model import SenseVoiceSmall
-from cosyvoice_onnx.export.wrappers import EncoderExportWrapper
+from sensevoice_onnx.export.model import SenseVoiceSmall
+from sensevoice_onnx.export.wrappers import EncoderExportWrapper
 from funasr import AutoModel
 
 def main():

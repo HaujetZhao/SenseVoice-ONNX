@@ -1,8 +1,8 @@
 import os
 import time
 import numpy as np
-from cosyvoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
-from cosyvoice_onnx.inference.exporters import export_to_srt, export_to_txt
+from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
+from sensevoice_onnx.inference.exporters import export_to_srt, export_to_txt
 
 def main():
     # 1. 初始化引擎
