@@ -64,26 +64,14 @@ class SenseVoiceInference:
         self.integrator = ResultIntegrator()
 
     def set_hotwords(self, hotwords):
-        """
-        设置或更新热词列表
-        支持格式:
-        - List[str]: ['word1', 'word2']
-        - str (path): 'd:/path/to/hotwords.txt'
-        - str (text): 'word1\nword2'
-        """
-        final_list = []
-        if isinstance(hotwords, list):
-            final_list = hotwords
-        elif isinstance(hotwords, (str, Path)):
-            hotword_path = Path(hotwords)
-            # 1. 检查是否为有效路径
-            if hotword_path.exists() and hotword_path.is_file():
-                with open(hotword_path, "r", encoding="utf-8") as f:
-                    final_list = [line.strip() for line in f if line.strip()]
-            else:
-                # 2. 否则视为以换行符分隔的多行文本 (仅针对字符串)
-                if isinstance(hotwords, str):
-                    final_list = [line.strip() for line in hotwords.splitlines() if line.strip()]
+        """设置或更新热词列表 (支持 List, 文件路径, 或多行文本)"""
+        if isinstance(hotwords, (str, Path)) and Path(hotwords).is_file():
+            with open(hotwords, "r", encoding="utf-8") as f: hotwords = f.readlines()
+        elif isinstance(hotwords, str):
+            hotwords = hotwords.splitlines()
+            
+        # 仅保留非空且不以 # 开头的行
+        final_list = [w.strip() for w in hotwords if w.strip() and not w.strip().startswith('#')]
         
         from .radar import HotwordRadar
         self.radar = HotwordRadar(final_list, self.sp)

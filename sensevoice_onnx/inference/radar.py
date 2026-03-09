@@ -45,7 +45,7 @@ class HotwordRadar:
         # 保存分段后的字符串形式用于回显
         self.hotword_pieces = [tokenizer.encode_as_pieces(sw) for sw in self.search_hotwords]
 
-    def scan(self, topk_ids, topk_probs, top1_indices, blank_id=0, max_lookahead=15, max_gap=1):
+    def scan(self, topk_ids, topk_probs, top1_indices, blank_id=0, max_lookahead=15, max_gap=0):
         """
         [单次扫描] 获取所有非重叠命中结果
         """
@@ -75,7 +75,6 @@ class HotwordRadar:
                 if lp not in self.prefix_index:
                     continue
                 
-                # 尝试匹配所有以此 Piece 开头的热词
                 for word_idx in self.prefix_index[lp]:
                     lower_token_seq = self.hotword_lower_sequences[word_idx]
                     match_data = self._try_match(
@@ -84,17 +83,23 @@ class HotwordRadar:
                     )
                     
                     if match_data:
-                        if not best_match_in_frame or match_data["prob"] > best_match_in_frame["prob"]:
-                            best_match_in_frame = {
-                                "word_idx": word_idx,
-                                "start_frame": t,
-                                "end_frame": match_data["end_frame"],
-                                "prob": match_data["prob"],
-                                "frame_indices": match_data["frame_indices"]
-                            }
-            
-            if best_match_in_frame:
-                hits.append(best_match_in_frame)
+                        # 记录这一帧发现的所有可能命中
+                        hits.append({
+                            "word_idx": word_idx,
+                            "start_frame": t,
+                            "end_frame": match_data["end_frame"],
+                            "prob": match_data["prob"],
+                            "frame_indices": match_data["frame_indices"]
+                        })
+                        name = self.hotwords[word_idx]
+                        print(f"[Radar Scan] 发现匹配: '{name}' | 起始帧: {t} | Token路径: {match_data['frame_indices']}")
+
+        # 打印调试信息：所有被扫描到的原始命中
+        if hits:
+            print(f"\n[Radar Debug] 原始命中 ({len(hits)}个):")
+            for h in hits:
+                name = self.hotwords[h['word_idx']]
+                print(f"  - 候选: {name:<15} | 区间: {h['start_frame']:3d}-{h['end_frame']:3d} | 概率: {h['prob']:.4f}")
 
         # 2. 后处理：非重叠合并
         return self._post_process(hits)
@@ -148,35 +153,60 @@ class HotwordRadar:
         }
 
     def _post_process(self, hits):
-        """去重合并，转换为用户友好的结构"""
+        """去重合并：优先保留长度更长的热词"""
         if not hits: return []
         
-        # 按开始时间排序
+        # 1. 按开始时间排序
         hits.sort(key=lambda x: x["start_frame"])
         
+        selected_hits = []
+        i = 0
+        while i < len(hits):
+            curr = hits[i]
+            best_h = curr
+            best_len = len(self.hotwords[curr["word_idx"]])
+            
+            # 向后探测有冲突（区间重叠）的项
+            j = i + 1
+            while j < len(hits):
+                nxt = hits[j]
+                if nxt["start_frame"] <= best_h["end_frame"]:
+                    nxt_len = len(self.hotwords[nxt["word_idx"]])
+                    name_curr = self.hotwords[best_h['word_idx']]
+                    name_nxt = self.hotwords[nxt['word_idx']]
+                    print(f"[Radar Filter] 冲突发现: '{name_curr}'(len={best_len}) vs '{name_nxt}'(len={nxt_len})")
+                    if nxt_len > best_len:
+                        print(f"  >> 切换为更长者: '{name_nxt}'")
+                        best_h = nxt
+                        best_len = nxt_len
+                    else:
+                        print(f"  >> 保留原强者: '{name_curr}'")
+                    j += 1
+                else:
+                    break
+            
+            selected_hits.append(best_h)
+            i = j
+            
+        # 2. 转换为用户友好的结构
         final_detected = []
-        last_covered_until = -1
-        
-        for h in hits:
-            # 这里的判定条件确保取“第一个发现的名字”，且后续重叠部分不重复报
-            if h["start_frame"] > last_covered_until:
-                idx = h["word_idx"]
-                pieces = self.hotword_pieces[idx]
-                token_details = []
-                
-                for tk_pos, f_idx in enumerate(h["frame_indices"]):
-                    token_details.append({
-                        "token": pieces[tk_pos], 
-                        "time": round(f_idx * 0.060, 3)
-                    })
-                
-                final_detected.append({
-                    "text": self.hotwords[idx],
-                    "start": round(h["start_frame"] * 0.060, 3),
-                    "end": round(h["end_frame"] * 0.060, 3),
-                    "prob": round(h["prob"], 4),
-                    "tokens": token_details
+        for h in selected_hits:
+            idx = h["word_idx"]
+            pieces = self.hotword_pieces[idx]
+            token_details = []
+            
+            for tk_pos, f_idx in enumerate(h["frame_indices"]):
+                token_details.append({
+                    "token": pieces[tk_pos], 
+                    "time": round(f_idx * 0.060, 3)
                 })
-                last_covered_until = h["end_frame"]
+            
+            final_detected.append({
+                "text": self.hotwords[idx],
+                "start": round(h["start_frame"] * 0.060, 3),
+                "end": round(h["end_frame"] * 0.060, 3),
+                "prob": round(h["prob"], 4),
+                "tokens": token_details
+            })
                 
         return final_detected
