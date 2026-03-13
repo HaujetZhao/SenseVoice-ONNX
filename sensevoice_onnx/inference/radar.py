@@ -89,7 +89,8 @@ class HotwordRadar:
                             "start_frame": t,
                             "end_frame": match_data["end_frame"],
                             "prob": match_data["prob"],
-                            "frame_indices": match_data["frame_indices"]
+                            "frame_indices": match_data["frame_indices"],
+                            "non_blank_count": match_data["non_blank_count"]
                         })
                         name = self.hotwords[word_idx]
                         print(f"[Radar Scan] 发现匹配: '{name}' | 起始帧: {t} | Token路径: {match_data['frame_indices']}")
@@ -99,37 +100,37 @@ class HotwordRadar:
             print(f"\n[Radar Debug] 原始命中 ({len(hits)}个):")
             for h in hits:
                 name = self.hotwords[h['word_idx']]
-                print(f"  - 候选: {name:<15} | 区间: {h['start_frame']:3d}-{h['end_frame']:3d} | 概率: {h['prob']:.4f}")
+                print(f"  - 候选: {name:<15} | 区间: {h['start_frame']:3d}-{h['end_frame']:3d} | 概率: {h['prob']:.4f} | 非空帧: {h['non_blank_count']}")
 
         # 2. 后处理：非重叠合并
-        return self._post_process(hits)
+        return self._post_process(hits, top1_indices, blank_id)
 
     def _try_match(self, t_start, k_start, lower_token_seq, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, max_gap):
         """内部尝试匹配一个特定词 (小写 Piece 匹配)"""
         T = topk_ids.shape[0]
         word_len = len(lower_token_seq)
         match_frames = []
-        
+
         # 首字处理
         match_frames.append(t_start)
         prob_sum = topk_probs[t_start, k_start]
         last_t = t_start
-        
+
         # 后续字跳跃匹配
         for i in range(1, word_len):
             target_lp = lower_token_seq[i]
             found_t = -1
             best_p = -1.0
-            
+
             search_start = last_t + 1
             search_end = min(search_start + max_lookahead, T)
-            
+
             for t in range(search_start, search_end):
                 # 间隙约束
                 gap_emissions = np.count_nonzero(top1_indices[last_t + 1 : t] != blank_id)
                 if gap_emissions > max_gap:
                     continue
-                
+
                 # 在此帧的 Top-K 中找目标小写 Piece
                 for k in range(topk_ids.shape[1]):
                     tid = topk_ids[t, k]
@@ -138,38 +139,61 @@ class HotwordRadar:
                         if p > best_p:
                             best_p = p
                             found_t = t
-            
+
             if found_t != -1:
                 match_frames.append(found_t)
                 prob_sum += best_p
                 last_t = found_t
             else:
                 return None # 链路中断
-                
+
+        # 统计匹配路径中覆盖的非空 Greedy 帧数量
+        non_blank_count = 0
+        for frame_idx in match_frames:
+            if top1_indices[frame_idx] != blank_id:
+                non_blank_count += 1
+
         return {
             "end_frame": last_t,
             "prob": prob_sum / word_len,
-            "frame_indices": match_frames
+            "frame_indices": match_frames,
+            "non_blank_count": non_blank_count
         }
 
-    def _post_process(self, hits):
-        """去重合并：优先保留长度更长的热词"""
+    def _post_process(self, hits, top1_indices, blank_id):
+        """
+        去重合并：优先保留长度更长的热词
+        新增约束：必须覆盖至少 2 个非空 Greedy 帧
+        """
         if not hits: return []
-        
+
+        # 0. 过滤：只保留覆盖至少 2 个非空帧的热词
+        filtered_hits = []
+        for h in hits:
+            if h['non_blank_count'] >= 2:
+                filtered_hits.append(h)
+            else:
+                name = self.hotwords[h['word_idx']]
+                print(f"[Radar Filter] ❌ 过滤掉 '{name}': 非空帧数={h['non_blank_count']} < 2")
+
+        if not filtered_hits:
+            print(f"[Radar Filter] 所有候选均被过滤（未覆盖足够非空帧）")
+            return []
+
         # 1. 按开始时间排序
-        hits.sort(key=lambda x: x["start_frame"])
-        
+        filtered_hits.sort(key=lambda x: x["start_frame"])
+
         selected_hits = []
         i = 0
-        while i < len(hits):
-            curr = hits[i]
+        while i < len(filtered_hits):
+            curr = filtered_hits[i]
             best_h = curr
             best_len = len(self.hotwords[curr["word_idx"]])
-            
+
             # 向后探测有冲突（区间重叠）的项
             j = i + 1
-            while j < len(hits):
-                nxt = hits[j]
+            while j < len(filtered_hits):
+                nxt = filtered_hits[j]
                 if nxt["start_frame"] <= best_h["end_frame"]:
                     nxt_len = len(self.hotwords[nxt["word_idx"]])
                     name_curr = self.hotwords[best_h['word_idx']]
@@ -184,7 +208,7 @@ class HotwordRadar:
                     j += 1
                 else:
                     break
-            
+
             selected_hits.append(best_h)
             i = j
             
