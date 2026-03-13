@@ -18,6 +18,7 @@ def main():
     # 2. 准备音频
     audio_path = r"test-fun.mp3"
     audio_path = r"dugong.mp3"
+    audio_path = r"test-try.mp3"
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")

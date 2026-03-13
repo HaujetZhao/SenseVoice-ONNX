@@ -9,7 +9,7 @@ from .audio import NumPyMelExtractor, load_audio
 from .encoder import SenseVoiceEncoder
 from .decoder import SenseVoiceDecoder
 from .integrator import ResultIntegrator
-from .radar import HotwordRadar
+from .radar_new import HotwordRadar
 from .schema import ASREngineConfig, TranscriptionResult, Timings, RecognitionResult
 
 class SenseVoiceInference:
@@ -73,7 +73,7 @@ class SenseVoiceInference:
         # 仅保留非空且不以 # 开头的行
         final_list = [w.strip() for w in hotwords if w.strip() and not w.strip().startswith('#')]
         
-        from .radar import HotwordRadar
+        from .radar_new import HotwordRadar
         self.radar = HotwordRadar(final_list, self.sp)
 
     def __call__(self, audio_data: np.ndarray, lid="auto", itn=True, chunk_size=40, overlap=5):

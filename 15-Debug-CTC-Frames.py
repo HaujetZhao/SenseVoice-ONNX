@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
-from sensevoice_onnx.inference.radar import HotwordRadar
+from sensevoice_onnx.inference.radar_new import HotwordRadar
 
 def main():
     # 1. 初始化引擎
@@ -10,14 +10,14 @@ def main():
     engine = SenseVoiceInference(config)
     
     # 2. 准备音频
-    audio_path = r"test-fun.mp3"
     audio_path = r"睡前消息.m4a"
     audio_path = r"dugong.mp3"
+    audio_path = r"test-try.mp3"
 
     # 准备热词
     hotword_file = "hot.txt"
-    with open('hot.txt', "r", encoding="utf-8") as f:
-        hotwords = [line.strip() for line in f if line.strip()]
+    with open(hotword_file, "r", encoding="utf-8") as f:
+        hotwords = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")
@@ -31,7 +31,7 @@ def main():
     T_valid = lfr_feat.shape[0]
     
     # 配置显示参数
-    display_top_k = 20 # <--- 变量定义：设置想要显示的搜索深度以及雷达扫描深度
+    display_top_k = 8 # <--- 变量定义：设置想要显示的搜索深度以及雷达扫描深度
     
     # Encoder
     enc_out = engine.encoder.forward(lfr_feat, lid="zh")
@@ -83,19 +83,22 @@ def main():
         candidates = topk_frames[t]
         
         # Column 2: Greedy
-        greedy_char = candidates[0][0]
-        greedy_display = f"{greedy_char}" if greedy_char != "[BLANK]" else "   ."
+        # 尝试去掉 Piece 前导的空格占位符显示，使表格更紧凑
+        greedy_char = candidates[0][0].replace("\u2581", " ").strip()
+        greedy_display = f"{greedy_char}" if candidates[0][0] != "[BLANK]" else "   ."
         
         # Column 3: Hotword Token Anchor
-        hw_display = global_match_map.get(t, "")
+        hw_display = global_match_map.get(t, "").replace("\u2581", " ").strip()
         
         # Column 4: 搜索空间
-        top_k_chars = [c[0] for c in candidates]
+        # 这里保留一个空格占位符转为空格，以便观察词间关系
+        top_k_chars = [c[0].replace("\u2581", " ") for c in candidates]
         search_space = " ".join(top_k_chars).replace("[BLANK]", "·")
         
         print(f"{timestamp:>6.2f}s    | {greedy_display:<5} | {hw_display:<5} | {search_space}")
 
     print("="*50)
+    print(f"【检测到的热词汇总】: {[h['text'] for h in detected]}")
     print(f"表格说明：'热词召回结果' 列显示的是雷达在 Top-{display_top_k} 空间中捕捉到的匹配路径。")
 
 if __name__ == "__main__":
