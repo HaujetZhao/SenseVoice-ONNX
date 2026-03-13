@@ -9,7 +9,7 @@ from .audio import NumPyMelExtractor, load_audio
 from .encoder import SenseVoiceEncoder
 from .decoder import SenseVoiceDecoder
 from .integrator import ResultIntegrator
-from .radar_new import HotwordRadar
+from .radar import HotwordRadar
 from .schema import ASREngineConfig, TranscriptionResult, Timings, RecognitionResult
 
 class SenseVoiceInference:

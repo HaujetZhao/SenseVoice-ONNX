@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
-from sensevoice_onnx.inference.radar_new import HotwordRadar
+from sensevoice_onnx.inference.radar import HotwordRadar
 
 def main():
     # 1. 初始化引擎
@@ -63,7 +63,7 @@ def main():
 
     # 4. 运行雷达扫描
     radar = HotwordRadar(hotwords, engine.sp)
-    detected = radar.scan(topk_ids, topk_probs, top1_indices)
+    detected = radar.scan(topk_ids, topk_probs, top1_indices, verbose=True)
     
     # 合并搜集所有热词的 match_map 用于表格显示
     global_match_map = {}
