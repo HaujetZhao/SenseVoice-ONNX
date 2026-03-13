@@ -1,332 +1,234 @@
 import re
 import numpy as np
+import time
+
+class HotwordTrieNode:
+    def __init__(self):
+        self.children = {}
+        self.word_indices = [] # 记录在此节点结束的热词索引
 
 class HotwordRadar:
     """
-    [字符级匹配版] 高性能热词召回组件
-    核心算法：基于字符级前缀消耗的 DFS 回溯 + 记忆化搜索
+    [Trie 树加速版] 高性能热词召回组件
     
-    相比旧版（基于 Token ID 序列匹配），本版本解决了分词器切分与解码器
-    Top-K 输出切分不一致导致匹配失败的问题。
-    例如 "CapsWriter" 分词器拆为 ['Ca','ps','W','ri','ter']，
-    但解码器输出 ['cap','s','writer']，旧版无法匹配，新版可以。
+    优化核心：
+    1. 字符级 Trie 树：合并所有热词的前缀，CapsWriter 和 CapsWriter-Offline 只需搜索一次前缀。
+    2. 全局状态记忆化：缓存 (frame, trie_node)，消除重复路径搜索。
+    3. 极速剪枝：基于 Trie 节点的子节点字典，快速过滤 Top-K 中无关的 Token。
     """
     def __init__(self, hotwords, tokenizer):
         self.tokenizer = tokenizer
         self.hotwords = hotwords
         
-        # 1. 预计算全量词表的小写映射 (去掉 SP 标记 ▁，用于字符级匹配)
+        # 1. 预计算全量词表的小写映射
         self.vocab_lower = []
         for i in range(tokenizer.get_piece_size()):
             piece = tokenizer.id_to_piece(i)
             self.vocab_lower.append(piece.lower().replace('\u2581', '').strip())
         
-        # 2. 预处理搜索词：去除符号
+        # 2. 构建 Trie 树
+        self.trie = HotwordTrieNode()
         self.search_hotwords = [re.sub(r'[^\w\s]+', ' ', w) for w in hotwords]
-        
-        # 3. 构建热词的小写纯字符串（去符号、去空格、小写化）
         self.hotword_lower_strings = []
-        for sw in self.search_hotwords:
-            # 去除所有空白字符，然后小写化
+        
+        for idx, sw in enumerate(self.search_hotwords):
             clean = re.sub(r'\s+', '', sw).lower()
             self.hotword_lower_strings.append(clean)
-        
-        # 4. 构建首字符前缀索引: {首字符: [word_idx, ...]}
-        self.char_prefix_index = {}
-        for idx, hw_lower in enumerate(self.hotword_lower_strings):
-            if not hw_lower:
-                continue
-            first_char = hw_lower[0]
-            if first_char not in self.char_prefix_index:
-                self.char_prefix_index[first_char] = []
-            self.char_prefix_index[first_char].append(idx)
+            if not clean: continue
+            
+            # 插入 Trie
+            node = self.trie
+            for char in clean:
+                if char not in node.children:
+                    node.children[char] = HotwordTrieNode()
+                node = node.children[char]
+            node.word_indices.append(idx)
 
     def scan(self, topk_ids, topk_probs, top1_indices, blank_id=0, max_lookahead=15, max_gap=0):
-        """
-        [单次扫描] 获取所有非重叠命中结果
-        
-        算法流程：
-        1. 逐帧扫描，仅在 greedy 非空帧触发匹配
-        2. 对该帧的 Top-K token，检查其字符是否为某热词的开头
-        3. 若是，执行字符级 DFS 回溯匹配
-        4. 后处理：非空帧过滤 + 长度优先去重
-        """
+        t_scan_start = time.perf_counter()
         T, K = topk_ids.shape
         hits = []
 
         for t in range(T):
-            # 准入条件：必须是 Greedy 非空帧
             if top1_indices[t] == blank_id:
                 continue
             
-            # 记录已尝试的 token 字符串，避免重复搜索
-            seen_tokens = set()
+            t_frame_start = time.perf_counter()
             
+            # 触发：检查当前帧 Top-K 中有哪些 Token 是 Trie 的根起始
+            seen_tokens = set()
             for k in range(K):
-                tc = self.vocab_lower[topk_ids[t, k]]
-                if not tc or tc in seen_tokens:
-                    continue
+                tid = int(topk_ids[t, k])
+                tc = self.vocab_lower[tid]
+                if not tc or tc in seen_tokens: continue
                 seen_tokens.add(tc)
                 
-                # 检查该 token 的首字符是否能触发某个热词
-                first_char = tc[0]
-                if first_char not in self.char_prefix_index:
-                    continue
-                
-                for word_idx in self.char_prefix_index[first_char]:
-                    hw_lower = self.hotword_lower_strings[word_idx]
+                # 如果 Token 首字符在 Trie 根部，启动批量 DFS
+                if tc[0] in self.trie.children:
+                    # 获取首 Piece 的词边界标记
+                    original_piece = self.tokenizer.id_to_piece(tid)
+                    has_boundary = original_piece.startswith('\u2581')
                     
-                    # 快速前缀检查：热词必须以该 token 的字符开头
-                    if not hw_lower.startswith(tc):
-                        continue
+                    # 尝试消耗此 Token 在 Trie 上的路径
+                    node = self.trie
+                    match_possible = True
+                    for char in tc:
+                        if char in node.children:
+                            node = node.children[char]
+                        else:
+                            match_possible = False
+                            break
                     
-                    match_data = self._try_match_chars(
-                        t, k, hw_lower, topk_ids, topk_probs, top1_indices,
-                        blank_id, max_lookahead
-                    )
-                    
-                    if match_data:
-                        hits.append({
-                            "word_idx": word_idx,
-                            "start_frame": t,
-                            "end_frame": match_data["end_frame"],
-                            "prob": match_data["prob"],
-                            "frame_indices": match_data["frame_indices"],
-                            "matched_tokens": match_data["matched_tokens"],
-                            "non_blank_count": match_data["non_blank_count"],
-                            "has_word_boundary": match_data.get("has_word_boundary", False)
-                        })
-                        name = self.hotwords[word_idx]
-                        print(f"[Radar Scan] 发现匹配: '{name}' | 起始帧: {t} | "
-                              f"Token路径: {match_data['frame_indices']} | "
-                              f"匹配token: {match_data['matched_tokens']}")
+                    if match_possible:
+                        # 启动集中式 DFS，从 node 节点继续往后找
+                        frame_hits = self._dfs_trie(
+                            t, k, node, topk_ids, topk_probs, top1_indices, 
+                            blank_id, max_lookahead, {}
+                        )
+                        for h in frame_hits:
+                            h["has_word_boundary"] = has_boundary
+                            hits.append(h)
 
-        # 打印调试信息
-        if hits:
-            print(f"\n[Radar Debug] 原始命中 ({len(hits)}个):")
-            for h in hits:
-                name = self.hotwords[h['word_idx']]
-                print(f"  - 候选: {name:<15} | 区间: {h['start_frame']:3d}-{h['end_frame']:3d} | "
-                      f"概率: {h['prob']:.4f} | 非空帧: {h['non_blank_count']}")
+            t_frame_end = time.perf_counter()
+            if (t_frame_end - t_frame_start) > 0.0001: # 仅打印有实际计算的帧
+                print(f"[Radar Profile] 帧 {t:3d} 匹配耗时: {(t_frame_end - t_frame_start)*1000:7.3f} ms")
 
-        # 后处理：非重叠合并
+        t_scan_total = (time.perf_counter() - t_scan_start) * 1000
+        print(f"[Radar Profile] 扫描总耗时: {t_scan_total:.3f} ms")
+
         return self._post_process(hits, top1_indices, blank_id)
 
-    def _try_match_chars(self, t_start, k_start, hotword_lower, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead):
+    def _dfs_trie(self, t_curr, k_curr, start_node, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, memo):
         """
-        字符级前缀消耗 + DFS 回溯 + 概率最优路径选择
-        
-        核心思想：
-        - 维护一个字符游标 cursor，指向热词中尚未匹配的位置
-        - 每一步从当前帧的 Top-K 中选一个 token，其小写字符必须是
-          remaining（hotword_lower[cursor:]）的前缀
-        - 该 token "消耗" len(token_chars) 个字符，cursor 前进相应步数
-        - DFS 探索**所有有效路径**，返回平均概率最高的那条
-        - 仅对已证实无解的 (frame, cursor) 做记忆化剪枝
-        
-        Args:
-            t_start: 触发帧
-            k_start: 触发 token 在 Top-K 中的位置
-            hotword_lower: 热词的小写纯字符串
-            其余参数同 scan
-        
-        Returns:
-            匹配成功返回 dict（含 frame_indices, matched_tokens 等），失败返回 None
+        基于 Trie 树的深度优先集中搜索
+        memo: (frame_idx, node_id) -> List[match_results]
         """
         T, K = topk_ids.shape
         
-        # 首 token 检查（已在 scan 中做了前缀验证，这里直接消耗）
-        first_tid = int(topk_ids[t_start, k_start])
-        first_token = self.vocab_lower[first_tid]
-        initial_cursor = len(first_token)
-        initial_prob = float(topk_probs[t_start, k_start])
-        
-        # 检测首 token 原始 piece 是否带词边界标记 ▁（用于恢复空格）
-        original_piece = self.tokenizer.id_to_piece(first_tid)
-        has_word_boundary = original_piece.startswith('\u2581')
-        
-        # 首 token 就完成整个热词（极短热词）
-        if initial_cursor >= len(hotword_lower):
-            non_blank = 1 if top1_indices[t_start] != blank_id else 0
-            return {
-                "end_frame": t_start,
-                "prob": initial_prob,
-                "frame_indices": [t_start],
-                "matched_tokens": [first_token],
-                "non_blank_count": non_blank,
-                "has_word_boundary": has_word_boundary
-            }
-        
-        # DFS 回溯搜索后续 token
-        # fail_set: 仅记录已证实无解的 (frame, cursor) 状态
-        # 不缓存成功结果，以保证全局概率最优（不同前缀下最优后缀可能不同）
-        fail_set = set()
-        
-        def dfs(search_from, cursor):
-            """
-            从 search_from 帧开始，尝试消耗 hotword_lower[cursor:] 的剩余字符。
-            探索所有有效路径，返回**平均概率最高**的那条。
+        # 定义内部递归
+        def search(f_prev, node):
+            state = (f_prev, id(node))
+            if state in memo: return memo[state]
             
-            回溯机制：
-            - 每步尝试当前帧 Top-K 的所有 token
-            - 若某 token 能消耗 remaining 的前缀，递归搜索后续帧
-            - 不提前返回，而是收集所有成功路径，取概率最优
-            - 已证实无解的 (frame, cursor) 通过 fail_set 剪枝
+            results = []
             
-            Returns:
-                最优路径: (frames_list, probs_list, tokens_list)
-                无解: None
-            """
-            # 终止条件：所有字符已被消耗
-            if cursor >= len(hotword_lower):
-                return ([], [], [])
-            
-            key = (search_from, cursor)
-            if key in fail_set:
-                return None
-            
-            remaining = hotword_lower[cursor:]
-            search_end = min(search_from + max_lookahead, T)
-            
-            best = None
-            best_avg = -1.0
-            
-            for f in range(search_from, search_end):
-                # 间隙约束：search_from 到 f 之间不能有 greedy 非空帧
-                # （search_from - 1 是上一个匹配帧，f 是当前候选帧）
-                if f > search_from:
-                    gap_emissions = np.count_nonzero(
-                        top1_indices[search_from:f] != blank_id
-                    )
-                    if gap_emissions > 0:
-                        break  # 后续帧间隙只会更大，直接终止
-                
-                # 遍历该帧的 Top-K token
-                for k in range(K):
-                    tc = self.vocab_lower[topk_ids[f, k]]
-                    if not tc:
-                        continue
-                    
-                    # 核心匹配逻辑：token 字符必须是 remaining 的前缀
-                    if remaining.startswith(tc):
-                        new_cursor = cursor + len(tc)
-                        sub_result = dfs(f + 1, new_cursor)
-                        
-                        if sub_result is not None:
-                            frames, probs, tokens = sub_result
-                            c_probs = [float(topk_probs[f, k])] + probs
-                            avg = sum(c_probs) / len(c_probs)
-                            if avg > best_avg:
-                                best = (
-                                    [f] + frames,
-                                    c_probs,
-                                    [tc] + tokens
-                                )
-                                best_avg = avg
-            
-            # 所有路径均失败 → 记入 fail_set 供后续剪枝
-            if best is None:
-                fail_set.add(key)
-            return best
-        
-        # 从首 token 之后的帧开始 DFS
-        sub_result = dfs(t_start + 1, initial_cursor)
-        if sub_result is None:
-            return None
-        
-        frames, probs, tokens = sub_result
-        all_frames = [t_start] + frames
-        all_probs = [initial_prob] + probs
-        all_tokens = [first_token] + tokens
-        
-        # 统计匹配路径中覆盖的非空 Greedy 帧数量
-        non_blank_count = sum(1 for f in all_frames if top1_indices[f] != blank_id)
-        
-        return {
-            "end_frame": all_frames[-1],
-            "prob": sum(all_probs) / len(all_probs),
-            "frame_indices": all_frames,
-            "matched_tokens": all_tokens,
-            "non_blank_count": non_blank_count,
-            "has_word_boundary": has_word_boundary
-        }
-
-    def _post_process(self, hits, top1_indices, blank_id):
-        """
-        去重合并：优先保留长度更长的热词
-        约束：必须覆盖至少 2 个非空 Greedy 帧
-        """
-        if not hits: return []
-
-        # 0. 过滤：只保留覆盖至少 2 个非空帧的热词
-        filtered_hits = []
-        for h in hits:
-            if h['non_blank_count'] >= 2:
-                filtered_hits.append(h)
-            else:
-                name = self.hotwords[h['word_idx']]
-                print(f"[Radar Filter] ❌ 过滤掉 '{name}': 非空帧数={h['non_blank_count']} < 2")
-
-        if not filtered_hits:
-            print(f"[Radar Filter] 所有候选均被过滤（未覆盖足够非空帧）")
-            return []
-
-        # 1. 按开始时间排序
-        filtered_hits.sort(key=lambda x: x["start_frame"])
-
-        selected_hits = []
-        i = 0
-        while i < len(filtered_hits):
-            curr = filtered_hits[i]
-            best_h = curr
-            best_len = len(self.hotwords[curr["word_idx"]])
-
-            # 向后探测有冲突（区间重叠）的项
-            j = i + 1
-            while j < len(filtered_hits):
-                nxt = filtered_hits[j]
-                if nxt["start_frame"] <= best_h["end_frame"]:
-                    nxt_len = len(self.hotwords[nxt["word_idx"]])
-                    name_curr = self.hotwords[best_h['word_idx']]
-                    name_nxt = self.hotwords[nxt['word_idx']]
-                    print(f"[Radar Filter] 冲突发现: '{name_curr}'(len={best_len}) vs '{name_nxt}'(len={nxt_len})")
-                    if nxt_len > best_len:
-                        print(f"  >> 切换为更长者: '{name_nxt}'")
-                        best_h = nxt
-                        best_len = nxt_len
-                    else:
-                        print(f"  >> 保留原强者: '{name_curr}'")
-                    j += 1
-                else:
-                    break
-
-            selected_hits.append(best_h)
-            i = j
-            
-        # 2. 转换为用户友好的结构
-        final_detected = []
-        for h in selected_hits:
-            idx = h["word_idx"]
-            token_details = []
-            
-            # 使用匹配路径中实际消耗的 token 字符串
-            for i, f_idx in enumerate(h["frame_indices"]):
-                token_details.append({
-                    "token": h["matched_tokens"][i],
-                    "time": round(f_idx * 0.060, 3)
+            # A. 检查当前节点是否是热词终点
+            for w_idx in node.word_indices:
+                results.append({
+                    "word_idx": w_idx,
+                    "start_frame": t_curr,
+                    "end_frame": f_prev,
+                    "prob_sum": float(topk_probs[t_curr, k_curr]),
+                    "count": 1,
+                    "frame_indices": [t_curr],
+                    "matched_tokens": [self.vocab_lower[topk_ids[t_curr, k_curr]]]
                 })
             
-            # 若首 token 带有词边界标记 ▁，在热词前补空格以恢复词间距
-            text = self.hotwords[idx]
+            # B. 继续往后搜索
+            search_end = min(f_prev + 1 + max_lookahead, T)
+            for f in range(f_prev + 1, search_end):
+                # 间隙约束
+                if f > f_prev + 1 and np.any(top1_indices[f_prev+1:f] != blank_id):
+                    break
+                
+                # 遍历当前帧 Top-K
+                for k in range(K):
+                    tc = self.vocab_lower[topk_ids[f, k]]
+                    if not tc: continue
+                    
+                    # 在 Trie 上尝试消耗此 Token
+                    temp_node = node
+                    match_ok = True
+                    for char in tc:
+                        if char in temp_node.children:
+                            temp_node = temp_node.children[char]
+                        else:
+                            match_ok = False
+                            break
+                    
+                    if match_ok:
+                        sub_res = search(f, temp_node)
+                        if sub_res:
+                            p_curr = float(topk_probs[f, k])
+                            for sr in sub_res:
+                                # 拷贝并累加
+                                results.append({
+                                    "word_idx": sr["word_idx"],
+                                    "start_frame": t_curr,
+                                    "end_frame": sr["end_frame"],
+                                    "prob_sum": sr["prob_sum"] + p_curr,
+                                    "count": sr["count"] + 1,
+                                    "frame_indices": [f] + sr["frame_indices"],
+                                    "matched_tokens": [tc] + sr["matched_tokens"]
+                                })
+            
+            # C. 概率筛选：如果同一单词有多个路径，在此节点只保留概率最高的一个 (局部最优)
+            # 注意：这里的逻辑被合并到了 D 中
+            memo[state] = results
+            return results
+
+        all_matches = search(t_curr, start_node)
+        
+        # D. 结构转换与最优路径选择 (对每个 word_idx 取平均概率最大者)
+        best_per_word = {}
+        for m in all_matches:
+            w_idx = m["word_idx"]
+            avg_prob = m["prob_sum"] / m["count"]
+            if w_idx not in best_per_word or avg_prob > best_per_word[w_idx]["prob"]:
+                m["prob"] = avg_prob
+                m["frame_indices"].reverse() # 递归回来是反的
+                m["matched_tokens"].reverse()
+                best_per_word[w_idx] = m
+                
+        return list(best_per_word.values())
+
+    def _post_process(self, hits, top1_indices, blank_id):
+        if not hits: return []
+        
+        # 1. 基础过滤：两帧非空
+        filtered = []
+        for h in hits:
+            non_blank = sum(1 for f in h["frame_indices"] if top1_indices[f] != blank_id)
+            if non_blank >= 2:
+                h["non_blank_count"] = non_blank
+                filtered.append(h)
+        
+        if not filtered: return []
+        
+        # 2. 排序与覆盖去重 (长度优先)
+        filtered.sort(key=lambda x: x["start_frame"])
+        selected = []
+        i = 0
+        while i < len(filtered):
+            best = filtered[i]
+            j = i + 1
+            while j < len(filtered) and filtered[j]["start_frame"] <= best["end_frame"]:
+                # 长度优先
+                if len(self.hotword_lower_strings[filtered[j]["word_idx"]]) > \
+                   len(self.hotword_lower_strings[best["word_idx"]]):
+                    best = filtered[j]
+                # 长度一样，取概率大
+                elif len(self.hotword_lower_strings[filtered[j]["word_idx"]]) == \
+                     len(self.hotword_lower_strings[best["word_idx"]]) and \
+                     filtered[j]["prob"] > best["prob"]:
+                    best = filtered[j]
+                j += 1
+            selected.append(best)
+            i = j
+            
+        # 3. 格式化输出
+        final = []
+        for h in selected:
+            text = self.hotwords[h["word_idx"]]
             if h.get("has_word_boundary", False):
                 text = " " + text
             
-            final_detected.append({
+            final.append({
                 "text": text,
                 "start": round(h["start_frame"] * 0.060, 3),
                 "end": round(h["end_frame"] * 0.060, 3),
                 "prob": round(h["prob"], 4),
-                "tokens": token_details
+                "tokens": [{"token": t, "time": round(f*0.060, 3)} 
+                           for t, f in zip(h["matched_tokens"], h["frame_indices"])]
             })
-                
-        return final_detected
+        return final

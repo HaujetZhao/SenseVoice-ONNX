@@ -29,10 +29,10 @@ def main():
     
     audio = load_audio(audio_path)
     
-    # 3. 运行推理 (连续三遍测试速度)
+    # 3. 运行推理 (测试速度)
     print(f"\n[Performance] 开始测速...")
     
-    for i in range(1, 4):
+    for i in range(1, 2):
         # 此时引擎内部已持有 radar，不会重复构建索引
         res_obj = engine.recognize(audio, lid="auto")
         tm = res_obj.timings
