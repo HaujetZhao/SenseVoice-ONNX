@@ -55,8 +55,8 @@ class SenseVoiceInference:
         with open(tokenizer_path, 'rb') as f:
             self.sp.load_from_serialized_proto(f.read())
         
-        # 4. 初始化热词雷达 (从配置中获取)
-        self.radar = None
+        # 4. 初始化热词雷达 (预先创建一个空雷达，之后动态更新)
+        self.radar = HotwordRadar([], self.sp)
         if self.config.hotwords:
             self.set_hotwords(self.config.hotwords)
             
@@ -73,8 +73,8 @@ class SenseVoiceInference:
         # 仅保留非空且不以 # 开头的行
         final_list = [w.strip() for w in hotwords if w.strip() and not w.strip().startswith('#')]
         
-        from .radar_new import HotwordRadar
-        self.radar = HotwordRadar(final_list, self.sp)
+        # 动态更新现有雷达的热词模型
+        self.radar.update_hotwords(final_list)
 
     def __call__(self, audio_data: np.ndarray, lid="auto", itn=True, chunk_size=40, overlap=5):
         """[默认识别接口] 根据音频长度自动选择分段或直接识别"""
@@ -138,11 +138,9 @@ class SenseVoiceInference:
         )
         t_decoder = time.perf_counter() - t0
         
-        # 3. 热词扫描
+        # 3. 热词扫描 (即便热词为空，扫描方法内部也会极速跳过)
         t0 = time.perf_counter()
-        detected_hotwords = []
-        if self.radar:
-            detected_hotwords = self.radar.scan(topk_indices, topk_probs, top1_indices)
+        detected_hotwords = self.radar.scan(topk_indices, topk_probs, top1_indices)
         t_radar = time.perf_counter() - t0
         
         # 4. 整合结果

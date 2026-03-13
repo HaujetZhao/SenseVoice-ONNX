@@ -18,7 +18,6 @@ class HotwordRadar:
     """
     def __init__(self, hotwords, tokenizer):
         self.tokenizer = tokenizer
-        self.hotwords = hotwords
         
         # 1. 预计算全量词表的小写映射
         self.vocab_lower = []
@@ -26,7 +25,12 @@ class HotwordRadar:
             piece = tokenizer.id_to_piece(i)
             self.vocab_lower.append(piece.lower().replace('\u2581', '').strip())
         
-        # 2. 构建 Trie 树
+        # 2. 初始化热词
+        self.update_hotwords(hotwords)
+
+    def update_hotwords(self, hotwords):
+        """动态更新热词列表并重构 Trie 树"""
+        self.hotwords = hotwords
         self.trie = HotwordTrieNode()
         self.search_hotwords = [re.sub(r'[^\w\s]+', ' ', w) for w in hotwords]
         self.hotword_lower_strings = []
