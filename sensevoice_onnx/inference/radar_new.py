@@ -93,7 +93,8 @@ class HotwordRadar:
                             "prob": match_data["prob"],
                             "frame_indices": match_data["frame_indices"],
                             "matched_tokens": match_data["matched_tokens"],
-                            "non_blank_count": match_data["non_blank_count"]
+                            "non_blank_count": match_data["non_blank_count"],
+                            "has_word_boundary": match_data.get("has_word_boundary", False)
                         })
                         name = self.hotwords[word_idx]
                         print(f"[Radar Scan] 发现匹配: '{name}' | 起始帧: {t} | "
@@ -113,15 +114,15 @@ class HotwordRadar:
 
     def _try_match_chars(self, t_start, k_start, hotword_lower, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead):
         """
-        字符级前缀消耗 + DFS 回溯 + 记忆化匹配
+        字符级前缀消耗 + DFS 回溯 + 概率最优路径选择
         
         核心思想：
         - 维护一个字符游标 cursor，指向热词中尚未匹配的位置
         - 每一步从当前帧的 Top-K 中选一个 token，其小写字符必须是
           remaining（hotword_lower[cursor:]）的前缀
         - 该 token "消耗" len(token_chars) 个字符，cursor 前进相应步数
-        - 使用 DFS 回溯：一条路不通时，自动回退到上一个分叉点尝试其他 token
-        - 使用 (frame, cursor) 记忆化避免重复搜索
+        - DFS 探索**所有有效路径**，返回平均概率最高的那条
+        - 仅对已证实无解的 (frame, cursor) 做记忆化剪枝
         
         Args:
             t_start: 触发帧
@@ -135,9 +136,14 @@ class HotwordRadar:
         T, K = topk_ids.shape
         
         # 首 token 检查（已在 scan 中做了前缀验证，这里直接消耗）
-        first_token = self.vocab_lower[topk_ids[t_start, k_start]]
+        first_tid = int(topk_ids[t_start, k_start])
+        first_token = self.vocab_lower[first_tid]
         initial_cursor = len(first_token)
         initial_prob = float(topk_probs[t_start, k_start])
+        
+        # 检测首 token 原始 piece 是否带词边界标记 ▁（用于恢复空格）
+        original_piece = self.tokenizer.id_to_piece(first_tid)
+        has_word_boundary = original_piece.startswith('\u2581')
         
         # 首 token 就完成整个热词（极短热词）
         if initial_cursor >= len(hotword_lower):
@@ -147,39 +153,43 @@ class HotwordRadar:
                 "prob": initial_prob,
                 "frame_indices": [t_start],
                 "matched_tokens": [first_token],
-                "non_blank_count": non_blank
+                "non_blank_count": non_blank,
+                "has_word_boundary": has_word_boundary
             }
         
         # DFS 回溯搜索后续 token
-        # memo: (search_from_frame, cursor_position) → 搜索结果或 None
-        # 记忆化保证相同的 (帧, 游标位置) 不会被重复搜索
-        memo = {}
+        # fail_set: 仅记录已证实无解的 (frame, cursor) 状态
+        # 不缓存成功结果，以保证全局概率最优（不同前缀下最优后缀可能不同）
+        fail_set = set()
         
         def dfs(search_from, cursor):
             """
             从 search_from 帧开始，尝试消耗 hotword_lower[cursor:] 的剩余字符。
+            探索所有有效路径，返回**平均概率最高**的那条。
             
             回溯机制：
-            - 每一步尝试当前帧 Top-K 的所有 token
-            - 若某 token 能消耗 remaining 的前缀，递归尝试后续帧
-            - 若递归失败，回退（cursor 自然恢复），尝试下一个 token
-            - 所有 token 均失败 → 尝试下一帧（跳过空帧）
-            - 所有帧均失败 → 返回 None，触发上层回溯
+            - 每步尝试当前帧 Top-K 的所有 token
+            - 若某 token 能消耗 remaining 的前缀，递归搜索后续帧
+            - 不提前返回，而是收集所有成功路径，取概率最优
+            - 已证实无解的 (frame, cursor) 通过 fail_set 剪枝
             
             Returns:
-                成功: (frames_list, probs_list, tokens_list)
-                失败: None
+                最优路径: (frames_list, probs_list, tokens_list)
+                无解: None
             """
             # 终止条件：所有字符已被消耗
             if cursor >= len(hotword_lower):
                 return ([], [], [])
             
             key = (search_from, cursor)
-            if key in memo:
-                return memo[key]
+            if key in fail_set:
+                return None
             
             remaining = hotword_lower[cursor:]
             search_end = min(search_from + max_lookahead, T)
+            
+            best = None
+            best_avg = -1.0
             
             for f in range(search_from, search_end):
                 # 间隙约束：search_from 到 f 之间不能有 greedy 非空帧
@@ -198,25 +208,26 @@ class HotwordRadar:
                         continue
                     
                     # 核心匹配逻辑：token 字符必须是 remaining 的前缀
-                    # 即 remaining.startswith(tc) → tc 被完全消耗
                     if remaining.startswith(tc):
                         new_cursor = cursor + len(tc)
                         sub_result = dfs(f + 1, new_cursor)
                         
                         if sub_result is not None:
                             frames, probs, tokens = sub_result
-                            result = (
-                                [f] + frames,
-                                [float(topk_probs[f, k])] + probs,
-                                [tc] + tokens
-                            )
-                            memo[key] = result
-                            return result
-                        # sub_result 为 None → 这条路不通，回溯尝试下一个 token
+                            c_probs = [float(topk_probs[f, k])] + probs
+                            avg = sum(c_probs) / len(c_probs)
+                            if avg > best_avg:
+                                best = (
+                                    [f] + frames,
+                                    c_probs,
+                                    [tc] + tokens
+                                )
+                                best_avg = avg
             
-            # 所有路径均失败
-            memo[key] = None
-            return None
+            # 所有路径均失败 → 记入 fail_set 供后续剪枝
+            if best is None:
+                fail_set.add(key)
+            return best
         
         # 从首 token 之后的帧开始 DFS
         sub_result = dfs(t_start + 1, initial_cursor)
@@ -236,7 +247,8 @@ class HotwordRadar:
             "prob": sum(all_probs) / len(all_probs),
             "frame_indices": all_frames,
             "matched_tokens": all_tokens,
-            "non_blank_count": non_blank_count
+            "non_blank_count": non_blank_count,
+            "has_word_boundary": has_word_boundary
         }
 
     def _post_process(self, hits, top1_indices, blank_id):
@@ -304,8 +316,13 @@ class HotwordRadar:
                     "time": round(f_idx * 0.060, 3)
                 })
             
+            # 若首 token 带有词边界标记 ▁，在热词前补空格以恢复词间距
+            text = self.hotwords[idx]
+            if h.get("has_word_boundary", False):
+                text = " " + text
+            
             final_detected.append({
-                "text": self.hotwords[idx],
+                "text": text,
                 "start": round(h["start_frame"] * 0.060, 3),
                 "end": round(h["end_frame"] * 0.060, 3),
                 "prob": round(h["prob"], 4),
