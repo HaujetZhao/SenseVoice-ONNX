@@ -196,17 +196,23 @@ class HotwordRadar:
     def _post_process(self, hits, top1_indices, blank_id):
         if not hits: return []
         
-        # 1. 基础过滤：两帧非空
+        # 1. 基础过滤与质量评估
         filtered = []
         for h in hits:
-            non_blank = sum(1 for f in h["frame_indices"] if top1_indices[f] != blank_id)
-            if non_blank >= 2:
-                h["non_blank_count"] = non_blank
+            # nb_greedy: 路径中落点在 Greedy (Top-1) 非空帧的数量 (模型主线支撑点越多越真实)
+            nb_greedy = sum(1 for f in h["frame_indices"] if top1_indices[f] != blank_id)
+            # b_greedy: 路径中落点在 Greedy 空帧上的数量 (穿过静默区越少越真实)
+            b_greedy = len(h["frame_indices"]) - nb_greedy
+            
+            # 基础门槛：至少要有 2 帧得到了模型 Greedy 输出的支撑（即便不是同一个字）
+            if nb_greedy >= 2:
+                h["nb_greedy"] = nb_greedy
+                h["b_greedy"] = b_greedy
                 filtered.append(h)
         
         if not filtered: return []
         
-        # 2. 排序与覆盖去重 (长度优先)
+        # 2. 排序与多维优先级覆盖去重
         filtered.sort(key=lambda x: x["start_frame"])
         selected = []
         i = 0
@@ -214,15 +220,25 @@ class HotwordRadar:
             best = filtered[i]
             j = i + 1
             while j < len(filtered) and filtered[j]["start_frame"] <= best["end_frame"]:
-                # 长度优先
-                if len(self.hotword_lower_strings[filtered[j]["word_idx"]]) > \
-                   len(self.hotword_lower_strings[best["word_idx"]]):
-                    best = filtered[j]
-                # 长度一样，取概率大
-                elif len(self.hotword_lower_strings[filtered[j]["word_idx"]]) == \
-                     len(self.hotword_lower_strings[best["word_idx"]]) and \
-                     filtered[j]["prob"] > best["prob"]:
-                    best = filtered[j]
+                candidate = filtered[j]
+                
+                # --- 优先级 1: Greedy 非空帧匹配的数量越多越优先 ---
+                if candidate["nb_greedy"] > best["nb_greedy"]:
+                    best = candidate
+                elif candidate["nb_greedy"] == best["nb_greedy"]:
+                    # --- 优先级 2: Greedy 空帧匹配的数量越少越优先 ---
+                    if candidate["b_greedy"] < best["b_greedy"]:
+                        best = candidate
+                    elif candidate["b_greedy"] == best["b_greedy"]:
+                        # --- 优先级 3: 原始字符长度优先 (保留最大匹配原则) ---
+                        len_c = len(self.hotword_lower_strings[candidate["word_idx"]])
+                        len_b = len(self.hotword_lower_strings[best["word_idx"]])
+                        if len_c > len_b:
+                            best = candidate
+                        elif len_c == len_b:
+                            # --- 优先级 4: 平均概率优先 ---
+                            if candidate["prob"] > best["prob"]:
+                                best = candidate
                 j += 1
             selected.append(best)
             i = j
@@ -243,3 +259,4 @@ class HotwordRadar:
                            for t, f in zip(h["matched_tokens"], h["frame_indices"])]
             })
         return final
+
