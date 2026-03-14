@@ -87,7 +87,7 @@ class HotwordRadar:
                         # 启动集中式 DFS，从 node 节点继续往后找
                         frame_hits = self._dfs_trie(
                             t, k, node, topk_ids, topk_probs, top1_indices, 
-                            blank_id, max_lookahead, {}
+                            blank_id, max_lookahead, {}, verbose=verbose
                         )
                         for h in frame_hits:
                             h["has_word_boundary"] = has_boundary
@@ -102,45 +102,48 @@ class HotwordRadar:
 
         return self._post_process(hits, top1_indices, blank_id)
 
-    def _dfs_trie(self, t_curr, k_curr, start_node, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, memo):
+    def _dfs_trie(self, t_curr, k_curr, start_node, topk_ids, topk_probs, top1_indices, blank_id, max_lookahead, memo, verbose=False):
         """
         基于 Trie 树的深度优先集中搜索
-        memo: (frame_idx, node_id) -> List[match_results]
+        memo: (frame_idx, node_id) -> Dict[word_idx: best_match_from_here]
         """
         T, K = topk_ids.shape
+        p_start = float(topk_probs[t_curr, k_curr])
+        t1 = self.vocab_lower[topk_ids[t_curr, k_curr]]
         
         # 定义内部递归
         def search(f_prev, node):
             state = (f_prev, id(node))
             if state in memo: return memo[state]
             
-            results = []
+            # 使用字典存储：word_idx -> 该节点往后能找到的最佳完成路径
+            # 这样对于同一个 Trie 节点，同样的词只需要保留概率最高的一个分支
+            best_results = {}
             
             # A. 检查当前节点是否是热词终点
             for w_idx in node.word_indices:
-                results.append({
+                res = {
                     "word_idx": w_idx,
-                    "start_frame": t_curr,
                     "end_frame": f_prev,
-                    "prob_sum": float(topk_probs[t_curr, k_curr]),
-                    "count": 1,
-                    "frame_indices": [t_curr],
-                    "matched_tokens": [self.vocab_lower[topk_ids[t_curr, k_curr]]]
-                })
+                    "prob_sum": 0.0, # 这里的 prob_sum 只存后续的，t_curr 在最外层加
+                    "count": 0,
+                    "frame_indices": [],
+                    "matched_tokens": []
+                }
+                best_results[w_idx] = res
+                if verbose:
+                    print(f"      [Match End] Word: {self.hotwords[w_idx]:<15} | Path: {t1} + {' '.join(res['matched_tokens'])}")
             
             # B. 继续往后搜索
             search_end = min(f_prev + 1 + max_lookahead, T)
             for f in range(f_prev + 1, search_end):
-                # 间隙约束
                 if f > f_prev + 1 and np.any(top1_indices[f_prev+1:f] != blank_id):
                     break
                 
-                # 遍历当前帧 Top-K
                 for k in range(K):
                     tc = self.vocab_lower[topk_ids[f, k]]
                     if not tc: continue
                     
-                    # 在 Trie 上尝试消耗此 Token
                     temp_node = node
                     match_ok = True
                     for char in tc:
@@ -151,40 +154,44 @@ class HotwordRadar:
                             break
                     
                     if match_ok:
-                        sub_res = search(f, temp_node)
-                        if sub_res:
+                        sub_matches = search(f, temp_node)
+                        if sub_matches:
                             p_curr = float(topk_probs[f, k])
-                            for sr in sub_res:
-                                # 拷贝并累加
-                                results.append({
-                                    "word_idx": sr["word_idx"],
-                                    "start_frame": t_curr,
-                                    "end_frame": sr["end_frame"],
-                                    "prob_sum": sr["prob_sum"] + p_curr,
-                                    "count": sr["count"] + 1,
-                                    "frame_indices": [f] + sr["frame_indices"],
-                                    "matched_tokens": [tc] + sr["matched_tokens"]
-                                })
-            
-            # C. 概率筛选：如果同一单词有多个路径，在此节点只保留概率最高的一个 (局部最优)
-            # 注意：这里的逻辑被合并到了 D 中
-            memo[state] = results
-            return results
+                            for w_idx, sr in sub_matches.items():
+                                new_prob_sum = sr["prob_sum"] + p_curr
+                                new_count = sr["count"] + 1
+                                avg_prob = new_prob_sum / new_count
+                                
+                                # 更新在该 (f_prev, node) 下，到达 w_idx 的最优后缀
+                                if w_idx not in best_results or avg_prob > (best_results[w_idx]["prob_sum"] / max(1, best_results[w_idx]["count"])):
+                                    best_results[w_idx] = {
+                                        "word_idx": w_idx,
+                                        "end_frame": sr["end_frame"],
+                                        "prob_sum": new_prob_sum,
+                                        "count": new_count,
+                                        "frame_indices": [f] + sr["frame_indices"],
+                                        "matched_tokens": [tc] + sr["matched_tokens"]
+                                    }
 
-        all_matches = search(t_curr, start_node)
+            memo[state] = best_results
+            return best_results
+
+        # 启动递归
+        all_best_suffixes = search(t_curr, start_node)
         
-        # D. 结构转换与最优路径选择 (对每个 word_idx 取平均概率最大者)
-        best_per_word = {}
-        for m in all_matches:
-            w_idx = m["word_idx"]
-            avg_prob = m["prob_sum"] / m["count"]
-            if w_idx not in best_per_word or avg_prob > best_per_word[w_idx]["prob"]:
-                m["prob"] = avg_prob
-                m["frame_indices"].reverse() # 递归回来是反的
-                m["matched_tokens"].reverse()
-                best_per_word[w_idx] = m
-                
-        return list(best_per_word.values())
+        # 组装最终结果
+        final_matches = []
+        for w_idx, sr in all_best_suffixes.items():
+            final_matches.append({
+                "word_idx": w_idx,
+                "start_frame": t_curr,
+                "end_frame": sr["end_frame"],
+                "prob": (sr["prob_sum"] + p_start) / (sr["count"] + 1),
+                "frame_indices": [t_curr] + sr["frame_indices"],
+                "matched_tokens": [t1] + sr["matched_tokens"]
+            })
+        return final_matches
+
 
     def _post_process(self, hits, top1_indices, blank_id):
         if not hits: return []
