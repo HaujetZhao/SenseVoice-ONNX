@@ -63,7 +63,11 @@ def main():
 
     # 4. 运行雷达扫描
     radar = HotwordRadar(hotwords, engine.sp)
-    detected = radar.scan(topk_ids, topk_probs, top1_indices, verbose=True)
+    topk_log_probs_raw, topk_indices_raw = engine.decoder.forward(enc_out)
+    full_probs = np.exp(topk_log_probs_raw[0, 4:, :].astype(np.float32))
+    full_ids = topk_indices_raw[0, 4:, :].astype(np.int32)
+    
+    detected = radar.scan(full_ids, full_probs, top_k=display_top_k, verbose=True)
     
     # 合并搜集所有热词的 match_map 用于表格显示
     global_match_map = {}

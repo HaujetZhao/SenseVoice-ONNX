@@ -140,7 +140,7 @@ class SenseVoiceInference:
         
         # 3. 热词扫描 (即便热词为空，扫描方法内部也会极速跳过)
         t0 = time.perf_counter()
-        detected_hotwords = self.radar.scan(topk_indices, topk_probs, top1_indices)
+        detected_hotwords = self.radar.scan(topk_indices, topk_probs, top_k=top_k)
         t_radar = time.perf_counter() - t0
         
         # 4. 整合结果

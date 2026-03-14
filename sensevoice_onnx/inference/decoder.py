@@ -76,9 +76,8 @@ class SenseVoiceDecoder:
         end = (T_valid + prompt_len) if T_valid is not None else topk_indices.shape[1]
         
         # --- A. 提取雷达所需 Top-K 空间 ---
-        # 裁剪模型输出的 100 到用户请求的 top_k (通常为20)
-        radar_indices = topk_indices[0, start:end, :top_k].astype(np.int32)
-        radar_probs = np.exp(topk_log_probs[0, start:end, :top_k].astype(np.float32))
+        radar_indices = topk_indices[0, start:end, :].astype(np.int32)
+        radar_probs = np.exp(topk_log_probs[0, start:end, :].astype(np.float32))
         top1_indices = radar_indices[:, 0]
         
         # --- B. 构造 Greedy 结果 (基于 Top-1) ---
