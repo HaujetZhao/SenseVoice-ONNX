@@ -70,7 +70,28 @@ def main():
         dynamo=True 
     )
 
-    print(f"\n✅ 导出完成！")
+    # 6. 注入 Metadata (配置全内置)
+    import onnx
+    import json
+    print("正在注入配置元数据到 ONNX 模型中...")
+    model = onnx.load(str(onnx_path))
+    
+    # 准备元数据
+    meta_data = {
+        "lid_dict": json.dumps(official_model.lid_dict),
+        "textnorm_dict": json.dumps(official_model.textnorm_dict),
+        "emo_dict": json.dumps(official_model.emo_dict),
+        "input_size": "560",
+        "output_size": "512"
+    }
+    
+    for key, value in meta_data.items():
+        meta = model.metadata_props.add()
+        meta.key = key
+        meta.value = value
+        
+    onnx.save(model, str(onnx_path))
+    print(f"\n✅ 导出与配置注入完成！")
     print(f"模型文件: {onnx_path}")
 
 if __name__ == "__main__":

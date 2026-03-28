@@ -33,21 +33,6 @@ def main():
         device="cpu"
     )
 
-    # 4. 保存一份简单的映射关系，方便推理时查表
-    # 这部分可以硬编码在推理代码里，也可以写成 json
-    import json
-    meta = {
-        "lid_dict": official_model_wrapper.model.lid_dict,
-        "textnorm_dict": official_model_wrapper.model.textnorm_dict,
-        "emo_dict": official_model_wrapper.model.emo_dict,
-        "input_size": 560,
-        "output_size": 512
-    }
-    meta_path = os.path.join(EXPORT_DIR, "Inference-Config.json")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=4, ensure_ascii=False)
-    print(f"基础配置信息已保存到: {meta_path}")
-
     print(f"\n✅ 推理资源准备就绪！")
 
 if __name__ == "__main__":

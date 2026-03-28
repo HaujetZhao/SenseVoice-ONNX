@@ -4,20 +4,14 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceEncoder:
-    def __init__(self, encoder_path: str, inference_config_path: str, onnx_provider="cpu", dml_pad_to: int = 30):
+    def __init__(self, encoder_path: str, onnx_provider="cpu", dml_pad_to: int = 30):
         # 1. 资源路径
         self.model_path = encoder_path # 记录路径用于 TRT 缓存
         encoder_path = Path(encoder_path)
-        inference_config_path = Path(inference_config_path)
         
         self.onnx_provider = onnx_provider.upper()
 
-        # 2. 加载资源
-        if not inference_config_path.exists():
-            raise FileNotFoundError(f"找不到配置: {inference_config_path}")
-            
-        with open(inference_config_path, "r", encoding="utf-8") as f:
-            self.config = json.load(f)
+        # 2. 初始化会话 (职责下放：稳健的 Provider 选择逻辑)
         
         # 3. 初始化会话 (职责下放：稳健的 Provider 选择逻辑)
         available_providers = ort.get_available_providers()
@@ -42,6 +36,20 @@ class SenseVoiceEncoder:
         print(f"[Encoder] 正在初始化 ONNX 会话 (Provider: {self.onnx_provider})...")
         self.session = ort.InferenceSession(str(encoder_path), providers=providers, sess_options=session_opts)
         
+        # 3. 从 Metadata 加载内部配置 (配置全内置模式)
+        meta = self.session.get_modelmeta().custom_metadata_map
+        if "lid_dict" in meta:
+            self.config = {
+                "lid_dict": json.loads(meta["lid_dict"]),
+                "textnorm_dict": json.loads(meta["textnorm_dict"]),
+                "emo_dict": json.loads(meta["emo_dict"]),
+                "input_size": int(meta.get("input_size", 560)),
+                "output_size": int(meta.get("output_size", 512))
+            }
+        else:
+            print("[Encoder] 警告：在 ONNX 中未找到元数据，将回退至硬编码配置。")
+            self.config = {} # 或设置默认值
+
         # 4. 精度适配 (检测模型是 FP32 还是 FP16)
         in_type = self.session.get_inputs()[0].type
         self.input_dtype = np.float16 if 'float16' in in_type else np.float32
@@ -71,7 +79,7 @@ class SenseVoiceEncoder:
         lid_dict = self.config.get("lid_dict", {})
         itn_dict = self.config.get("textnorm_dict", {})
         
-        lid_idx = lid_dict.get(lid, 3) 
+        lid_idx = lid_dict.get(lid, 0) 
         itn_str = "withitn" if itn else "woitn"
         itn_idx = itn_dict.get(itn_str, 14)
         

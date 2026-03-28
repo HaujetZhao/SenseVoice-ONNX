@@ -32,12 +32,10 @@ class SenseVoiceInference:
         encoder_path = model_dir / f"SenseVoice-Encoder.{config.precision}.onnx"
         decoder_path = model_dir / f"SenseVoice-CTC.{config.precision}.onnx"
         tokenizer_path = model_dir / "tokenizer.bpe.model"
-        inference_config_path = model_dir / "Inference-Config.json"
  
         # 2. 构造编码器、解码器与前端
         self.encoder = SenseVoiceEncoder(
             encoder_path=encoder_path, 
-            inference_config_path=inference_config_path, 
             onnx_provider=self.onnx_provider,
             dml_pad_to=self.config.dml_pad_to
         )
