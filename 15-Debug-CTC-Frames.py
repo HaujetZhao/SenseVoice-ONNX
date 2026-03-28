@@ -18,6 +18,7 @@ def main():
     hotword_file = "hot.txt"
     with open(hotword_file, "r", encoding="utf-8") as f:
         hotwords = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+    engine.update_hotwords(hotwords)
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")

@@ -4,35 +4,40 @@ import numpy as np
 from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load_audio
 
 def main():
-    # 1. 初始化引擎 (使用 ASREngineConfig)
+    # 1. 准备热词
+    hotword_file = "hot.txt"
+    with open(hotword_file, "r", encoding="utf-8") as f:
+        hotwords = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+
+    # 2. 初始化引擎 (使用 ASREngineConfig)
     config = ASREngineConfig(
         model_dir="./model",
-        onnx_provider="dml",
-        hotwords='hot.txt',
-        pad_to=30, 
+        onnx_provider="cpu",
+        dml_pad_to=30, 
         precision='int4', 
         top_k=5
     )
     engine = SenseVoiceInference(config)
+    engine.update_hotwords(hotwords)
     
     # 2. 准备音频
     audio_path = r"test-fun.mp3"
-    audio_path = r"dugong.mp3"
-    audio_path = r"test-try.mp3"
+    # audio_path = r"dugong.mp3"
+    # audio_path = r"test-try.mp3"
     
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")
         return
         
     print(f"\n[SenseVoice] 正在处理音频: {os.path.basename(audio_path)}")
-    print(f"[Hotwords] 当前热词列表: {config.hotwords}")
+    print(f"[Hotwords] 当前热词列表: {hotwords}")
     
     audio = load_audio(audio_path)
     
     # 3. 运行推理 (测试速度)
     print(f"\n[Performance] 开始测速...")
     
-    for i in range(1, 2):
+    for i in range(1, 4):
         # 此时引擎内部已持有 radar，不会重复构建索引
         res_obj = engine.recognize(audio, lid="auto")
         tm = res_obj.timings

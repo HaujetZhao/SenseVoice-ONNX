@@ -58,23 +58,15 @@ class SenseVoiceInference:
         # 4. 初始化热词雷达 (预先创建一个空雷达，之后动态更新)
         self.radar = HotwordRadar([], self.sp)
         if self.config.hotwords:
-            self.set_hotwords(self.config.hotwords)
+            self.update_hotwords(self.config.hotwords)
             
         # 5. 结果整合器
         self.integrator = ResultIntegrator()
 
-    def set_hotwords(self, hotwords):
-        """设置或更新热词列表 (支持 List, 文件路径, 或多行文本)"""
-        if isinstance(hotwords, (str, Path)) and Path(hotwords).is_file():
-            with open(hotwords, "r", encoding="utf-8") as f: hotwords = f.readlines()
-        elif isinstance(hotwords, str):
-            hotwords = hotwords.splitlines()
-            
-        # 仅保留非空且不以 # 开头的行
-        final_list = [w.strip() for w in hotwords if w.strip() and not w.strip().startswith('#')]
-        
+    def update_hotwords(self, hotwords: List[str]):
+        """更新热词列表 (仅接受字符串列表)"""
         # 动态更新现有雷达的热词模型
-        self.radar.update_hotwords(final_list)
+        self.radar.update_hotwords(hotwords)
 
     def __call__(self, audio_data: np.ndarray, lid="auto", itn=True, chunk_size=40, overlap=5):
         """[默认识别接口] 根据音频长度自动选择分段或直接识别"""

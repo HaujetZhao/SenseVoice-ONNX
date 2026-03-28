@@ -5,17 +5,22 @@ from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load
 from sensevoice_onnx.inference.exporters import export_to_srt, export_to_txt
 
 def main():
-    # 1. 初始化引擎
+    # 1. 准备热词
+    hotword_file = "hot.txt"
+    with open(hotword_file, "r", encoding="utf-8") as f:
+        hotwords = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+
+    # 2. 初始化引擎
     # 长音频转录建议使用 CPU，或者 DML (不设置 pad_to 或设置较大的 pad_to)
     config = ASREngineConfig(
         model_dir="./model",
-        device="dml", 
-        hotwords='hot.txt', 
+        onnx_provider="dml", 
         precision='int8'
     )
     engine = SenseVoiceInference(config)
+    engine.update_hotwords(hotwords)
     
-    # 2. 运行长音频转录 (直接使用 transcribe 方法)
+    # 3. 运行长音频转录 (直接使用 transcribe 方法)
     audio_path = r"d:\cosyvoice\睡前消息.m4a"
     if not os.path.exists(audio_path):
         print(f"❌ 找不到测试音频: {audio_path}")
