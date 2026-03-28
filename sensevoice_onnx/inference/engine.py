@@ -41,12 +41,12 @@ class SenseVoiceInference:
             inference_config_path=inference_config_path, 
             prompt_embed_path=prompt_embed_path, 
             onnx_provider=self.onnx_provider,
-            pad_to=self.config.pad_to
+            dml_pad_to=self.config.dml_pad_to
         )
         self.decoder = SenseVoiceDecoder(
             decoder_path=decoder_path, 
             onnx_provider=self.onnx_provider,
-            pad_to=self.config.pad_to
+            dml_pad_to=self.config.dml_pad_to
         )
         self.frontend = NumPyMelExtractor()
         

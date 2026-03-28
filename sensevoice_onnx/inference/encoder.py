@@ -4,7 +4,7 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceEncoder:
-    def __init__(self, encoder_path: str, inference_config_path: str, prompt_embed_path: str, onnx_provider="cpu", pad_to: int = 30):
+    def __init__(self, encoder_path: str, inference_config_path: str, prompt_embed_path: str, onnx_provider="cpu", dml_pad_to: int = 30):
         # 1. 资源路径
         self.model_path = encoder_path # 记录路径用于 TRT 缓存
         encoder_path = Path(encoder_path)
@@ -51,8 +51,8 @@ class SenseVoiceEncoder:
 
         # 5. DML 策略设置 (仅在 DML 模式下生效)
         self.use_dml = (self.onnx_provider.lower() == "dml")
-        self.fixed_len = int(pad_to * 17) # 1s ≈ 17帧 LFR
-        if self.use_dml and isinstance(pad_to, int) and pad_to > 0:
+        self.fixed_len = int(dml_pad_to * 17) # 1s ≈ 17帧 LFR
+        if self.use_dml and isinstance(dml_pad_to, int) and dml_pad_to > 0:
             self.warmup()
 
     def warmup(self):

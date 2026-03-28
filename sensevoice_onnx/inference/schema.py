@@ -117,7 +117,7 @@ class ASREngineConfig:
     hotwords: Optional[Any] = None
     top_k: int = 10
     itn: bool = True
-    pad_to: int = 30
+    dml_pad_to: int = 30
     precision: str = "fp16"
 
 

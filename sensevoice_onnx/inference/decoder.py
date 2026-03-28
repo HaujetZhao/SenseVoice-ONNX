@@ -3,7 +3,7 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceDecoder:
-    def __init__(self, decoder_path: str, onnx_provider="cpu", pad_to: int = 30):
+    def __init__(self, decoder_path: str, onnx_provider="cpu", dml_pad_to: int = 30):
         # 1. 资源路径
         self.model_path = decoder_path
         decoder_path = Path(decoder_path)
@@ -40,8 +40,8 @@ class SenseVoiceDecoder:
 
         # 4. DML 预热
         self.use_dml = (self.onnx_provider == "DML")
-        self.fixed_len = int(pad_to * 17) + 4 # 1s ≈ 17帧 + 4帧 Prompt
-        if self.use_dml and isinstance(pad_to, int) and pad_to > 0:
+        self.fixed_len = int(dml_pad_to * 17) + 4 # 1s ≈ 17帧 + 4帧 Prompt
+        if self.use_dml and isinstance(dml_pad_to, int) and dml_pad_to > 0:
             self.warmup()
 
     def warmup(self):
