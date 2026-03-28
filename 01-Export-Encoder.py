@@ -30,24 +30,23 @@ def main():
     official_model = official_model_wrapper.model
     
     # 3. 初始化我们改造过的导出专用模型
-    # 我们需要根据官方模型的配置来初始化我们的 SenseVoiceSmall
-    # 注意：这里我们直接从 official_model 拷贝参数或重用其内部的 Encoder 部分
-    # 为了保证算子的一致性（使用我们修改过的 model.py），我们将权重加载到我们的类中
-    print("正在初始化导出版本编码器...")
+    print("正在初始化导出版本编码器并集成 Embedding 权重...")
     export_encoder = official_model.encoder
-    # 将 export_encoder 包装到我们的导出包装器中
-    wrapper = EncoderExportWrapper(export_encoder)
+    # 提取官方模型的 Embedding 层权重
+    embed_weight = official_model.embed.weight.detach()
+    # 将 export_encoder 和权重包装到我们的导出包装器中
+    wrapper = EncoderExportWrapper(export_encoder, embed_weight)
     wrapper.eval()
 
     # 4. 准备虚拟输入数据 (Dummy Inputs)
-    # speech_feat: (Batch, T, 560) -> 假设 1 秒音频，约 17 帧 LFR
+    # speech_feat: (Batch, T, 560)
     # mask: (Batch, T)
-    # prompt_feat: (Batch, 4, 560)
+    # prompt_ids: (Batch, 4) -> 现在改为整数 ID
     batch_size = 1
     T = 17 
     dummy_speech = torch.randn(batch_size, T, 560)
     dummy_mask = torch.ones(batch_size, T)
-    dummy_prompt = torch.randn(batch_size, 4, 560)
+    dummy_prompt = torch.zeros((batch_size, 4), dtype=torch.long) # 输入 4 个 ID
 
     # 5. 执行 ONNX 导出
     print(f"正在导出 ONNX 到: {onnx_path}")
@@ -59,16 +58,16 @@ def main():
         wrapper, 
         (dummy_speech, dummy_mask, dummy_prompt), 
         str(onnx_path),
-        input_names=['speech_feat', 'mask', 'prompt_feat'],
+        input_names=['speech_feat', 'mask', 'prompt_ids'],
         output_names=['encoder_out'],
         dynamic_axes={
             'speech_feat': {0: 'batch', 1: 'T'},
             'mask': {0: 'batch', 1: 'T'},
-            'prompt_feat': {0: 'batch'},
+            'prompt_ids': {0: 'batch'},
             'encoder_out': {0: 'batch', 1: 'T_plus_4'}
         },
         opset_version=18, 
-        dynamo=True # 使用 Dynamo 导出模式
+        dynamo=True 
     )
 
     print(f"\n✅ 导出完成！")

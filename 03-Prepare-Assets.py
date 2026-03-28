@@ -25,19 +25,13 @@ def main():
         print(f"正在拷贝 BPE 模型: {bpe_dst}")
         shutil.copy2(bpe_src, bpe_dst)
 
-    # 3. 提取 Prompt Embedding 权重
-    print(f"正在从 {MODEL_DIR} 提取 Embedding 权重...")
+    # 3. 基础配置提取
+    print(f"正在从 {MODEL_DIR} 提取基础配置...")
     official_model_wrapper = AutoModel(
         model=str(MODEL_DIR),
         trust_remote_code=True,
         device="cpu"
     )
-    # 获取 Embedding 层权重 (torch.Tensor)
-    embed_weight = official_model_wrapper.model.embed.weight.detach().cpu().numpy()
-    
-    embed_path = os.path.join(EXPORT_DIR, "Prompt-Embd.npy")
-    print(f"正在保存 Embedding 矩阵 (形状: {embed_weight.shape}) 到: {embed_path}")
-    np.save(embed_path, embed_weight)
 
     # 4. 保存一份简单的映射关系，方便推理时查表
     # 这部分可以硬编码在推理代码里，也可以写成 json

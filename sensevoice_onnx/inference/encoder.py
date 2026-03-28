@@ -4,12 +4,11 @@ import numpy as np
 import onnxruntime as ort
 
 class SenseVoiceEncoder:
-    def __init__(self, encoder_path: str, inference_config_path: str, prompt_embed_path: str, onnx_provider="cpu", dml_pad_to: int = 30):
+    def __init__(self, encoder_path: str, inference_config_path: str, onnx_provider="cpu", dml_pad_to: int = 30):
         # 1. 资源路径
         self.model_path = encoder_path # 记录路径用于 TRT 缓存
         encoder_path = Path(encoder_path)
         inference_config_path = Path(inference_config_path)
-        prompt_embed_path = Path(prompt_embed_path)
         
         self.onnx_provider = onnx_provider.upper()
 
@@ -19,7 +18,6 @@ class SenseVoiceEncoder:
             
         with open(inference_config_path, "r", encoding="utf-8") as f:
             self.config = json.load(f)
-        self.prompt_embed = np.load(prompt_embed_path)
         
         # 3. 初始化会话 (职责下放：稳健的 Provider 选择逻辑)
         available_providers = ort.get_available_providers()
@@ -64,12 +62,12 @@ class SenseVoiceEncoder:
         self.session.run(None, {
             "speech_feat": dummy_lfr,
             "mask": dummy_mask,
-            "prompt_feat": dummy_prompt
+            "prompt_ids": np.zeros((1, 4), dtype=np.int64)
         })
         print("[Encoder] DML 预热完成。")
 
     def construct_prompt(self, lid="auto", itn=True):
-        """构造 4 帧 Prompt Embedding"""
+        """构造 4 个 Prompt Token ID"""
         lid_dict = self.config.get("lid_dict", {})
         itn_dict = self.config.get("textnorm_dict", {})
         
@@ -77,21 +75,18 @@ class SenseVoiceEncoder:
         itn_str = "withitn" if itn else "woitn"
         itn_idx = itn_dict.get(itn_str, 14)
         
-        # 核心逻辑镜像 engine.py: Language(1) -> Event_Emo(2) -> Style(1)
-        lid_vec = self.prompt_embed[lid_idx:lid_idx+1]
-        event_emo_vec = self.prompt_embed[1:3]
-        style_vec = self.prompt_embed[itn_idx:itn_idx+1]
-        
-        prompt = np.concatenate([lid_vec, event_emo_vec, style_vec], axis=0)
-        return prompt[np.newaxis, ...].astype(self.input_dtype)
+        # 核心逻辑镜像 official: Language(1) -> Event_Emo(2) -> Style(1)
+        # 现在只返回索引，Gather 操作在 ONNX 内部完成
+        prompt_ids = np.array([lid_idx, 1, 2, itn_idx], dtype=np.int64)
+        return prompt_ids[np.newaxis, :] # (1, 4)
 
     def forward(self, lfr_feat, lid="zh", itn=True):
         """
         执行 Encoder 推理
         返回: enc_out (1, T+4, 512)
         """
-        # 1. 构造 Prompt
-        prompt_feat = self.construct_prompt(lid=lid, itn=itn)
+        # 1. 构造 Prompt ID 序列
+        prompt_ids = self.construct_prompt(lid=lid, itn=itn)
         
         T_valid = lfr_feat.shape[0]
         
@@ -112,7 +107,7 @@ class SenseVoiceEncoder:
             enc_out = self.session.run(None, {
                 "speech_feat": full_feat,
                 "mask": mask,
-                "prompt_feat": prompt_feat
+                "prompt_ids": prompt_ids
             })[0]
             
             # 4. 直接返回全量结果 (包括填充部分)
@@ -124,6 +119,6 @@ class SenseVoiceEncoder:
             enc_out = self.session.run(None, {
                 "speech_feat": lfr_feat[np.newaxis, ...].astype(self.input_dtype),
                 "mask": mask,
-                "prompt_feat": prompt_feat
+                "prompt_ids": prompt_ids
             })[0]
             return enc_out
