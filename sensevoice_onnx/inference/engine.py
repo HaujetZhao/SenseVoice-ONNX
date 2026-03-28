@@ -26,12 +26,10 @@ class SenseVoiceInference:
         """
         self.config = config
         self.onnx_provider = config.onnx_provider
-        model_dir = Path(config.model_dir)
-            
-        # 1. 内部路径解析 (统一映射逻辑)
-        encoder_path = model_dir / f"SenseVoice-Encoder.{config.precision}.onnx"
-        decoder_path = model_dir / f"SenseVoice-CTC.{config.precision}.onnx"
-        tokenizer_path = model_dir / "tokenizer.bpe.model"
+        # 1. 显式路径获取 (从外部配置直接传入)
+        encoder_path = config.encoder_path
+        decoder_path = config.decoder_path
+        tokenizer_path = config.tokenizer_path
  
         # 2. 构造编码器、解码器与前端
         self.encoder = SenseVoiceEncoder(

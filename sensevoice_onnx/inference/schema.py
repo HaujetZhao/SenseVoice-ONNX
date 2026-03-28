@@ -106,19 +106,23 @@ class ASREngineConfig:
     ASR 引擎配置参数
 
     Attributes:
-        model_dir: 模型目录路径
+        encoder_path: 编码器模型路径 (.onnx)
+        decoder_path: 解码器模型路径 (.onnx)
+        tokenizer_path: 分词器模型路径 (.model)
         onnx_provider: 推理后端 (CPU, CUDA, DML, TensorRT)
         hotwords: 初始热词字符串列表
         top_k: 热词搜索 Top-K 深度
         itn: 是否启用反向文本规范化
+        dml_pad_to: DML 填充时长 (秒)
     """
-    model_dir: str
+    encoder_path: str
+    decoder_path: str
+    tokenizer_path: str
     onnx_provider: str = "cpu"
     hotwords: Optional[List[str]] = None
     top_k: int = 10
     itn: bool = True
     dml_pad_to: int = 30
-    precision: str = "fp16"
 
 
 # ==================== 导出列表 ====================

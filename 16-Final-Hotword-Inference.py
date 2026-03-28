@@ -9,12 +9,15 @@ def main():
     with open(hotword_file, "r", encoding="utf-8") as f:
         hotwords = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
 
-    # 2. 初始化引擎 (使用 ASREngineConfig)
+    # 2. 初始化引擎 (显式指定路径实现解耦)
+    model_dir = "./model"
+    precision = "int4"
     config = ASREngineConfig(
-        model_dir="./model",
+        encoder_path=f"{model_dir}/SenseVoice-Encoder.{precision}.onnx",
+        decoder_path=f"{model_dir}/SenseVoice-CTC.{precision}.onnx",
+        tokenizer_path=f"{model_dir}/tokenizer.bpe.model",
         onnx_provider="cpu",
         dml_pad_to=30, 
-        precision='int4', 
         top_k=5
     )
     engine = SenseVoiceInference(config)

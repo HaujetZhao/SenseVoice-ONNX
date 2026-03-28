@@ -4,9 +4,15 @@ from sensevoice_onnx.inference import SenseVoiceInference, ASREngineConfig, load
 from sensevoice_onnx.inference.radar import HotwordRadar
 
 def main():
-    # 1. 初始化引擎
+    # 1. 初始化引擎 (显式指定路径实现解耦)
     model_dir = "./model"
-    config = ASREngineConfig(model_dir=model_dir, onnx_provider="cpu", precision="int4")
+    precision = "int4"
+    config = ASREngineConfig(
+        encoder_path=f"{model_dir}/SenseVoice-Encoder.{precision}.onnx",
+        decoder_path=f"{model_dir}/SenseVoice-CTC.{precision}.onnx",
+        tokenizer_path=f"{model_dir}/tokenizer.bpe.model",
+        onnx_provider="cpu"
+    )
     engine = SenseVoiceInference(config)
     
     # 2. 准备音频

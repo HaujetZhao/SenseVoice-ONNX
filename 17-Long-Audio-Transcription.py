@@ -10,12 +10,14 @@ def main():
     with open(hotword_file, "r", encoding="utf-8") as f:
         hotwords = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
 
-    # 2. 初始化引擎
-    # 长音频转录建议使用 CPU，或者 DML (不设置 pad_to 或设置较大的 pad_to)
+    # 2. 初始化引擎 (显式指定路径实现解耦)
+    model_dir = "./model"
+    precision = "int8"
     config = ASREngineConfig(
-        model_dir="./model",
-        onnx_provider="dml", 
-        precision='int8'
+        encoder_path=f"{model_dir}/SenseVoice-Encoder.{precision}.onnx",
+        decoder_path=f"{model_dir}/SenseVoice-CTC.{precision}.onnx",
+        tokenizer_path=f"{model_dir}/tokenizer.bpe.model",
+        onnx_provider="dml"
     )
     engine = SenseVoiceInference(config)
     engine.update_hotwords(hotwords)
