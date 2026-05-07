@@ -21,7 +21,7 @@ def convert_to_fp16(input_path):
             keep_io_types=False,
             min_positive_val=1e-7,
             max_finite_val=65504,
-            op_block_list=['LayerNormalization'] 
+            op_block_list=['LayerNormalization', "Mul"] 
         )
         onnx.save(model_fp16, output_path)
         print(f"   ✅ [Success] Saved FP16 model.")
