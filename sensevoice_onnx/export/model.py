@@ -258,7 +258,11 @@ class MultiHeadedAttentionSANM(nn.Module):
 
 class LayerNorm(nn.LayerNorm):
     def forward(self, input):
-        return F.layer_norm(input, self.normalized_shape, self.weight, self.bias, self.eps)
+        # 手动拆解以规避 ONNX Runtime CPU 上的 LayerNormalization NaN Bug
+        mean = input.mean(dim=-1, keepdim=True)
+        var = input.var(dim=-1, keepdim=True, unbiased=False)
+        return (input - mean) / torch.sqrt(var + self.eps) * self.weight + self.bias
+
 
 
 def sequence_mask(lengths, maxlen=None, dtype=torch.float32, device=None):
